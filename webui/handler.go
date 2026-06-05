@@ -1,0 +1,894 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// configPath is the path to the persistent config file.
+var configPath string
+
+func init() {
+	configPath = os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "/data/sinksonic.yaml"
+	}
+}
+
+// --- Hosts management ---
+
+type HostConfig struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Volume int    `json:"volume"`
+	Muted  bool   `json:"muted"`
+}
+
+type HostsFile struct {
+	Version int          `json:"version"`
+	Hosts   []HostConfig `json:"hosts"`
+}
+
+const hostsPath = "/data/hosts.json"
+
+func loadHosts() *HostsFile {
+	content, err := os.ReadFile(hostsPath)
+	if err != nil {
+		return &HostsFile{Version: 1, Hosts: []HostConfig{}}
+	}
+	var hf HostsFile
+	if err := json.Unmarshal(content, &hf); err != nil {
+		return &HostsFile{Version: 1, Hosts: []HostConfig{}}
+	}
+	if hf.Hosts == nil {
+		hf.Hosts = []HostConfig{}
+	}
+	return &hf
+}
+
+func saveHosts(hf *HostsFile) error {
+	data, err := json.MarshalIndent(hf, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(hostsPath, data, 0644)
+}
+
+func findHost(hf *HostsFile, id string) *HostConfig {
+	for i := range hf.Hosts {
+		if hf.Hosts[i].ID == id {
+			return &hf.Hosts[i]
+		}
+	}
+	return nil
+}
+
+func applyStreamVolume(nodeID string, hc *HostConfig) {
+	volStr := fmt.Sprintf("%.2f", float64(hc.Volume)/255.0)
+	runCmd(3*time.Second, "wpctl", "set-volume", nodeID, volStr)
+	if hc.Muted {
+		runCmd(3*time.Second, "wpctl", "set-mute", nodeID, "1")
+	} else {
+		runCmd(3*time.Second, "wpctl", "set-mute", nodeID, "0")
+	}
+}
+
+// findPrimarySinkId returns the node ID of the first non-tunnel ALSA sink from wpctl status.
+// Used for level monitoring.
+func findPrimarySinkId() string {
+	out, err := runCmd(3*time.Second, "wpctl", "status")
+	if err != nil {
+		return ""
+	}
+	inSinks := false
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "Sinks:") || (strings.Contains(trimmed, "Sinks") && len(trimmed) < 20) {
+			inSinks = true
+			continue
+		}
+		if inSinks && (trimmed == "" || strings.HasPrefix(trimmed, "├─") || strings.HasPrefix(trimmed, "└─") || strings.HasPrefix(trimmed, "│")) == false {
+			inSinks = false
+			continue
+		}
+		if !inSinks || trimmed == "" {
+			continue
+		}
+		// Skip box-drawing chars and default marker
+		cleaned := strings.NewReplacer("│", "", "├", "", "└", "", "─", "", "*", "").Replace(trimmed)
+		cleaned = strings.TrimSpace(cleaned)
+		parts := strings.Fields(cleaned)
+		if len(parts) < 2 {
+			continue
+		}
+		nodeID := strings.TrimRight(parts[0], ".")
+		if _, err := strconv.Atoi(nodeID); err != nil {
+			continue
+		}
+		// Check if this is a tunnel sink (skip those)
+		name := strings.Join(parts[1:], " ")
+		if strings.Contains(name, "tunnel") || strings.Contains(name, "Tunnel") {
+			continue
+		}
+		return nodeID
+	}
+	return ""
+}
+
+// --- Response types ---
+
+type StatusResponse struct {
+	Uptime          int     `json:"uptime"`
+	RAMUsed         string  `json:"ram_used"`
+	CPULoad         string  `json:"cpu_load"`
+	Temperature     string  `json:"temperature"`
+	SampleRate      int     `json:"sample_rate"`
+	BufferSize      int     `json:"buffer_size"`
+	LatencyMs       float64 `json:"latency_ms"`
+	Channels        string  `json:"channels"`
+	PipeWireRunning bool    `json:"pipewire_running"`
+	Levels          []int   `json:"levels"`
+}
+
+type StreamResponse struct {
+	Index     int    `json:"index"`
+	Name      string `json:"name"`
+	NodeName  string `json:"node_name"`
+	NodeID    string `json:"node_id"`
+	Volume    int    `json:"volume"`
+	Muted     bool   `json:"muted"`
+	Connected bool   `json:"connected"`
+	HostID    string `json:"host_id"`
+	HostLabel string `json:"host_label"`
+	Known     bool   `json:"known"`
+}
+
+type VolumeRequest struct {
+	Index  int `json:"index"`
+	Volume int `json:"volume"`
+}
+
+type MuteRequest struct {
+	Index int `json:"index"`
+}
+
+// --- Utilities ---
+
+func runCmd(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func parseInt(s string, fallback int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func parseFloat(s string, fallback float64) float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func getUptime() int {
+	content, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	return int(parseFloat(strings.Fields(string(content))[0], 0))
+}
+
+func getRAM() string {
+	content, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return "--"
+	}
+	var total, available int64
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		val := parseInt(fields[1], 0) * 1024
+		switch fields[0] {
+		case "MemTotal:":
+			total = int64(val)
+		case "MemAvailable:":
+			available = int64(val)
+		}
+	}
+	if total == 0 {
+		return "--"
+	}
+	usedPct := float64(total-available) / float64(total) * 100
+	usedMB := (total - available) / 1024 / 1024
+	totalMB := total / 1024 / 1024
+	return fmt.Sprintf("%d/%d MB (%.0f%%)", usedMB, totalMB, usedPct)
+}
+
+func getCPULoad() string {
+	content, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return "--"
+	}
+	fields := strings.Fields(string(content))
+	if len(fields) < 3 {
+		return "--"
+	}
+	return fmt.Sprintf("%.1f / %.1f / %.1f",
+		parseFloat(fields[0], 0),
+		parseFloat(fields[1], 0),
+		parseFloat(fields[2], 0))
+}
+
+func getTemp() string {
+	content, err := os.ReadFile("/sys/class/thermal/thermal_zone0/temp")
+	if err != nil {
+		return "--"
+	}
+	millideg := parseInt(string(content), 0)
+	if millideg == 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%.1f °C", float64(millideg)/1000.0)
+}
+
+func getPipeWireInfo() (int, int, int) {
+	sampleRate := 48000
+	bufferSize := 512
+	channels := 2
+
+	// Get real buffer size from pw-metadata settings
+	metaOut, metaErr := runCmd(3*time.Second, "pw-metadata", "-n", "settings")
+	if metaErr == nil {
+		for _, line := range strings.Split(metaOut, "\n") {
+			// format: "update: id:0 key:'clock.rate' value:'48000' type:''"
+			if strings.Contains(line, "clock.rate") {
+				if v := extractMetaValue(line); v != "" {
+					if r := parseInt(v, 0); r > 0 {
+						sampleRate = r
+					}
+				}
+			}
+			if strings.Contains(line, "clock.force-quantum") {
+				if v := extractMetaValue(line); v != "" {
+					if b := parseInt(v, 0); b > 0 {
+						bufferSize = b
+					}
+				}
+			}
+			if strings.Contains(line, "clock.quantum") && !strings.Contains(line, "force") && !strings.Contains(line, "min") && !strings.Contains(line, "max") {
+				if v := extractMetaValue(line); v != "" {
+					if b := parseInt(v, 0); b > 0 && bufferSize == 512 {
+						// Only use if force-quantum wasn't set
+						bufferSize = b
+					}
+				}
+			}
+		}
+	}
+
+	// Get channels from the first active sink
+	out, err := runCmd(5*time.Second, "pactl", "list", "sinks")
+	if err == nil {
+		for _, line := range strings.Split(out, "\n") {
+			t := strings.TrimSpace(line)
+			if strings.Contains(t, "Sample Specification") {
+				parts := strings.Fields(t)
+				for _, p := range parts {
+					if strings.HasSuffix(p, "ch") && len(p) > 2 {
+						channels = parseInt(p[:len(p)-2], 2)
+					}
+				}
+			}
+		}
+	}
+
+	return sampleRate, bufferSize, channels
+}
+
+// extractMetaValue extracts the value from pw-metadata output line
+// Input: "update: id:0 key:'clock.rate' value:'48000' type:''"
+// Output: "48000"
+func extractMetaValue(line string) string {
+	// Match value:'...' or value:"..."
+	start := strings.Index(line, "value:'")
+	if start < 0 {
+		start = strings.Index(line, `value:"`)
+		if start < 0 {
+			return ""
+		}
+		start += 7
+		end := strings.Index(line[start:], `"`)
+		if end < 0 {
+			return ""
+		}
+		return line[start : start+end]
+	}
+	start += 7
+	end := strings.Index(line[start:], "'")
+	if end < 0 {
+		return ""
+	}
+	return line[start : start+end]
+}
+
+func isPipeWireRunning() bool {
+	out, err := runCmd(3*time.Second, "pw-cli", "info", "all")
+	if err != nil {
+		// Fallback: check via pactl in case pw-cli isn't in PATH
+		_, err2 := runCmd(2*time.Second, "pactl", "info")
+		return err2 == nil
+	}
+	// pw-cli info all output: type: PipeWire:Interface:Core/4, name: "pipewire-0"
+	return strings.Contains(out, "PipeWire:Interface:Core") || strings.Contains(out, "host-name:")
+}
+
+// --- Stream parsing ---
+
+func parseWpctlStatus() []StreamResponse {
+	out, err := runCmd(5*time.Second, "wpctl", "status")
+	if err != nil {
+		return nil
+	}
+
+	hf := loadHosts()
+	var streams []StreamResponse
+	idx := 0
+	inStreams := false
+
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect Streams section (incoming audio streams/sink-inputs)
+		if strings.Contains(trimmed, "Streams:") || (strings.Contains(trimmed, "Streams") && len(trimmed) < 20 && !strings.Contains(trimmed, "│  ")) {
+			inStreams = true
+			continue
+		}
+		// End of Streams section: blank line or next section header
+		if inStreams && (trimmed == "" || strings.HasPrefix(trimmed, "Video") || strings.HasPrefix(trimmed, "Settings") || strings.HasPrefix(trimmed, "Audio") || strings.HasPrefix(trimmed, "├─") && !strings.Contains(trimmed, "│")) {
+			inStreams = false
+			continue
+		}
+
+		if !inStreams {
+			continue
+		}
+
+		// Skip channel connection lines (contain ">")
+		if strings.Contains(trimmed, ">") {
+			continue
+		}
+
+		// Skip empty and box-drawing-only lines
+		if trimmed == "" || trimmed == "│" {
+			continue
+		}
+
+		// Parse: "│      NN. Name" or "│      NN. Name  [vol: X.XX]"
+		cleaned := strings.NewReplacer("│", "").Replace(trimmed)
+		cleaned = strings.TrimSpace(cleaned)
+		parts := strings.Fields(cleaned)
+		if len(parts) < 2 {
+			continue
+		}
+
+		// First field should be NN. (number with trailing dot)
+		nodeID := strings.TrimRight(parts[0], ".")
+		if _, err := strconv.Atoi(nodeID); err != nil {
+			continue
+		}
+
+		// Collect name (everything after node ID, before [vol: ...])
+		var nameParts []string
+		for _, p := range parts[1:] {
+			if strings.HasPrefix(p, "[vol:") || strings.HasPrefix(p, "[") {
+				break
+			}
+			nameParts = append(nameParts, p)
+		}
+		name := strings.Join(nameParts, " ")
+		if name == "" {
+			continue
+		}
+
+		// Get volume via wpctl get-volume
+		volume := 128
+		muted := false
+		volOut, volErr := runCmd(3*time.Second, "wpctl", "get-volume", nodeID)
+		if volErr == nil {
+			volParts := strings.Fields(volOut)
+			if len(volParts) >= 2 {
+				v := parseFloat(volParts[1], 0.5)
+				volume = int(v * 255)
+				if volume > 255 {
+					volume = 255
+				}
+			}
+			// Check for [MUTED] suffix
+			if strings.Contains(volOut, "MUTED") || strings.Contains(volOut, "[MUTED]") {
+				muted = true
+			}
+		}
+
+		// Get node.name from wpctl inspect
+		nodeName := ""
+		inspOut, inspErr := runCmd(3*time.Second, "wpctl", "inspect", nodeID)
+		if inspErr == nil {
+			for _, vline := range strings.Split(inspOut, "\n") {
+				tv := strings.TrimSpace(vline)
+				if strings.Contains(tv, "node.name") && strings.Contains(tv, "=") {
+					eqParts := strings.SplitN(tv, "=", 2)
+					if len(eqParts) == 2 {
+						nodeName = strings.Trim(strings.TrimSpace(eqParts[1]), "\"")
+					}
+				}
+			}
+		}
+		if nodeName == "" {
+			nodeName = name
+		}
+
+		// Match against known hosts
+		hostID := nodeName
+		hostLabel := name
+		known := false
+		if hc := findHost(hf, hostID); hc != nil {
+			hostLabel = hc.Label
+			known = true
+			// Apply stored settings for this stream
+			applyStreamVolume(nodeID, hc)
+			volume = hc.Volume
+			muted = hc.Muted
+		}
+
+		streams = append(streams, StreamResponse{
+			Index:     idx,
+			Name:      name,
+			NodeName:  nodeName,
+			NodeID:    nodeID,
+			Volume:    volume,
+			Muted:     muted,
+			Connected: true,
+			HostID:    hostID,
+			HostLabel: hostLabel,
+			Known:     known,
+		})
+		idx++
+	}
+
+	return streams
+}
+
+// --- JSON response helper ---
+
+func writeJSON(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(data)
+}
+
+// --- API handlers ---
+
+func apiStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pwRunning := isPipeWireRunning()
+	sr, bs, ch := getPipeWireInfo()
+	chStr := fmt.Sprintf("%d", ch)
+	latency := float64(bs) / float64(sr) * 1000
+
+	// Read real output level from the primary ALSA sink
+	levels := make([]int, 32)
+	if pwRunning {
+		if sinkID := findPrimarySinkId(); sinkID != "" {
+			volOut, volErr := runCmd(3*time.Second, "wpctl", "get-volume", sinkID)
+			if volErr == nil {
+				volParts := strings.Fields(volOut)
+				if len(volParts) >= 2 {
+					v := parseFloat(volParts[1], 0.0)
+					pct := int(v * 100)
+					if pct > 100 {
+						pct = 100
+					}
+					// Spread the primary level across 32 bars as a simple VU approximation
+					for i := 0; i < 32; i++ {
+						barPct := pct
+						// Taper the higher bars to simulate a VU meter look
+						if i > 24 {
+							barPct = pct * (32 - i) / 8
+						}
+						if barPct > 100 {
+							barPct = 100
+						}
+						if barPct < 2 {
+							barPct = 2
+						}
+						levels[i] = barPct
+					}
+				}
+			}
+		}
+	}
+
+	status := StatusResponse{
+		Uptime:          getUptime(),
+		RAMUsed:         getRAM(),
+		CPULoad:         getCPULoad(),
+		Temperature:     getTemp(),
+		SampleRate:      sr,
+		BufferSize:      bs,
+		LatencyMs:       latency,
+		Channels:        chStr,
+		PipeWireRunning: pwRunning,
+		Levels:          levels,
+	}
+
+	writeJSON(w, status)
+}
+
+func apiStreams(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	streams := parseWpctlStatus()
+	writeJSON(w, streams)
+}
+
+func apiHosts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		hf := loadHosts()
+		// Annotate each host with whether it's currently connected
+		streams := parseWpctlStatus()
+		connected := make(map[string]bool)
+		for _, s := range streams {
+			connected[s.HostID] = true
+		}
+		type HostWithStatus struct {
+			HostConfig
+			Connected bool `json:"connected"`
+		}
+		result := make([]HostWithStatus, 0, len(hf.Hosts))
+		for _, h := range hf.Hosts {
+			result = append(result, HostWithStatus{
+				HostConfig: h,
+				Connected:  connected[h.ID],
+			})
+		}
+		writeJSON(w, result)
+
+	case http.MethodPut:
+		var hosts []HostConfig
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(body, &hosts); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		hf := &HostsFile{Version: 1, Hosts: hosts}
+		if err := saveHosts(hf); err != nil {
+			log.Printf("Failed to save hosts: %v", err)
+			http.Error(w, "Failed to save", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "saved"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func apiSetVolume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req VolumeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Re-parse to get fresh node IDs
+	streams := parseWpctlStatus()
+	if req.Index < 0 || req.Index >= len(streams) {
+		http.Error(w, "Stream not found", http.StatusNotFound)
+		return
+	}
+
+	stream := streams[req.Index]
+	volStr := fmt.Sprintf("%.2f", float64(req.Volume)/255.0)
+	log.Printf("Setting volume for %s to %.2f", stream.NodeName, float64(req.Volume)/255.0)
+	runCmd(3*time.Second, "wpctl", "set-volume", stream.NodeID, volStr)
+
+	// Save to hosts.json
+	hf := loadHosts()
+	if hc := findHost(hf, stream.HostID); hc != nil {
+		hc.Volume = req.Volume
+	} else {
+		hf.Hosts = append(hf.Hosts, HostConfig{
+			ID:     stream.HostID,
+			Label:  stream.HostLabel,
+			Volume: req.Volume,
+			Muted:  stream.Muted,
+		})
+	}
+	saveHosts(hf)
+
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func apiSetMute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req MuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	streams := parseWpctlStatus()
+	if req.Index < 0 || req.Index >= len(streams) {
+		http.Error(w, "Stream not found", http.StatusNotFound)
+		return
+	}
+
+	stream := streams[req.Index]
+	log.Printf("Toggling mute for %s (%s)", stream.Name, stream.NodeName)
+	runCmd(3*time.Second, "wpctl", "set-mute", stream.NodeID, "toggle")
+
+	// Toggle mute and save to hosts.json
+	hf := loadHosts()
+	newMuted := !stream.Muted
+	if hc := findHost(hf, stream.HostID); hc != nil {
+		hc.Muted = newMuted
+	} else {
+		hf.Hosts = append(hf.Hosts, HostConfig{
+			ID:     stream.HostID,
+			Label:  stream.HostLabel,
+			Volume: stream.Volume,
+			Muted:  newMuted,
+		})
+	}
+	saveHosts(hf)
+
+	writeJSON(w, map[string]string{"status": "ok", "muted": fmt.Sprintf("%v", newMuted)})
+}
+
+func apiFlushStreams(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runCmd(5*time.Second, "wpctl", "reload-config")
+	writeJSON(w, map[string]string{"status": "refreshed"})
+}
+
+func apiConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			http.Error(w, "Config not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/yaml")
+		io.WriteString(w, string(content))
+
+	case http.MethodPut:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		if err := os.WriteFile(configPath, body, 0644); err != nil {
+			log.Printf("Failed to write config: %v", err)
+			http.Error(w, "Failed to save config", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Config saved to %s (%d bytes)", configPath, len(body))
+		writeJSON(w, map[string]string{"status": "saved"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func apiReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runCmd(5*time.Second, "wpctl", "reload-config")
+	writeJSON(w, map[string]string{"status": "reloading"})
+}
+
+// apiCustomCSS serves /data/style.css if it exists, for user theming.
+func apiCustomCSS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	content, err := os.ReadFile("/data/style.css")
+	if err != nil {
+		w.Header().Set("Content-Type", "text/css")
+		w.Write([]byte("/* no custom style.css on /data */"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/css")
+	w.Write(content)
+}
+
+// apiLogs returns recent system journal logs relevant to SinkSonic.
+func apiLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	out, err := runCmd(10*time.Second, "journalctl", "--no-pager", "-n", "200",
+		"-u", "pipewire", "-u", "pipewire-pulse", "-u", "wireplumber",
+		"-u", "sinksonic-webui",
+		"--output=short-precise")
+	if err != nil {
+		// Fallback: try without user units
+		out2, err2 := runCmd(10*time.Second, "journalctl", "--no-pager", "-n", "100",
+			"--output=short-precise")
+		if err2 != nil {
+			http.Error(w, "Failed to read logs", http.StatusInternalServerError)
+			return
+		}
+		out = out2
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(out))
+}
+
+// --- Service management ---
+
+type ServiceStatus struct {
+	Name   string `json:"name"`
+	Active bool   `json:"active"`
+	PID    int    `json:"pid"`
+	Uptime string `json:"uptime"`
+}
+
+func getServiceStatus(name string) ServiceStatus {
+	s := ServiceStatus{Name: name}
+	out, _ := runCmd(3*time.Second, "systemctl", "--user", "is-active", name)
+	s.Active = strings.TrimSpace(out) == "active"
+	if s.Active {
+		pidOut, _ := runCmd(2*time.Second, "systemctl", "--user", "show", name, "-p", "MainPID")
+		pidStr := strings.TrimPrefix(strings.TrimSpace(pidOut), "MainPID=")
+		if pid, err := strconv.Atoi(pidStr); err == nil {
+			s.PID = pid
+		}
+		startOut, _ := runCmd(2*time.Second, "systemctl", "--user", "show", name, "-p", "ActiveEnterTimestamp")
+		s.Uptime = strings.TrimPrefix(strings.TrimSpace(startOut), "ActiveEnterTimestamp=")
+	}
+	return s
+}
+
+func apiServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	services := []ServiceStatus{
+		getServiceStatus("pipewire"),
+		getServiceStatus("wireplumber"),
+		getServiceStatus("pipewire-pulse"),
+	}
+	// Also check sinksonic-webui (system service, not user)
+	out, _ := runCmd(2*time.Second, "systemctl", "is-active", "sinksonic-webui")
+	webuiActive := strings.TrimSpace(out) == "active"
+	services = append(services, ServiceStatus{
+		Name:   "sinksonic-webui",
+		Active: webuiActive,
+		PID:    0,
+		Uptime: "",
+	})
+	writeJSON(w, services)
+}
+
+func apiServiceRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		http.Error(w, "Missing 'name' query param", http.StatusBadRequest)
+		return
+	}
+	valid := map[string]bool{"pipewire": true, "wireplumber": true, "pipewire-pulse": true}
+	if !valid[name] {
+		http.Error(w, "Invalid service name", http.StatusBadRequest)
+		return
+	}
+	log.Printf("Restarting service: %s", name)
+	_, err := runCmd(10*time.Second, "systemctl", "--user", "restart", name)
+	if err != nil {
+		log.Printf("Failed to restart %s: %v", name, err)
+		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]string{"status": "restarted", "service": name})
+}
+
+// apiApplySettings applies audio settings at runtime (buffer, latency)
+func apiApplySettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	buffer := r.URL.Query().Get("buffer")
+	latency := r.URL.Query().Get("latency")
+	log.Printf("Applying audio settings: buffer=%s latency=%s", buffer, latency)
+
+	if buffer != "" {
+		runCmd(5*time.Second, "pw-metadata", "-n", "settings", "0", "clock.force-quantum", buffer)
+	}
+	if latency != "" {
+		// Convert ms to rate as target
+		runCmd(5*time.Second, "pw-metadata", "-n", "settings", "0", "clock.force-quantum", "0")
+		runCmd(5*time.Second, "pw-metadata", "-n", "settings", "0", "clock.force-rate", "0")
+	}
+
+	writeJSON(w, map[string]string{"status": "applied"})
+}
+
+// apiReboot triggers a system reboot.
+func apiReboot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	log.Printf("Reboot requested via web UI")
+	writeJSON(w, map[string]string{"status": "rebooting"})
+	go func() {
+		runCmd(30*time.Second, "sudo", "/run/current-system/sw/bin/reboot")
+	}()
+}
+
+// apiPoweroff triggers a system poweroff.
+func apiPoweroff(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	log.Printf("Poweroff requested via web UI")
+	writeJSON(w, map[string]string{"status": "powering_off"})
+	go func() {
+		runCmd(30*time.Second, "sudo", "/run/current-system/sw/bin/poweroff")
+	}()
+}

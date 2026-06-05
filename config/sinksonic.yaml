@@ -1,0 +1,32 @@
+# SinkSonic — runtime configuration
+# Mounted at /data/sinksonic.yaml for persistent runtime edits.
+# Changes to wifi settings require a reboot to take effect.
+# The shipping default lives in /etc/sinksonic/config.yaml.
+
+system:
+  hostname: sinksonic
+  timezone: Europe/Berlin
+
+audio:
+  sample_rate: 48000
+  # Buffer size in frames. Larger = more jitter tolerance but higher latency.
+  # 512 = 10.6ms (default, low latency), 2048 = 42.6ms (network safe),
+  # 4096 = 85.3ms (WiFi safe)
+  buffer_size: 2048
+  latency_target_ms: 10
+  # Resample quality 1-14. 14 = max quality (SRC_SINC_BEST_QUALITY).
+  # Lower = less CPU but worse audio when source rate differs (e.g. 44100→48000).
+  # On WiFi with dropouts, try 4 (medium) for stability.
+  resample_quality: 14
+
+network:
+  interface: eth0
+  dhcp: true
+  zeroconf: true
+  # Uncomment and fill in to use WiFi instead of Ethernet:
+  #wifi:
+  #  ssid: "MyNetwork"
+  #  password: "MyPassword"
+
+webui:
+  port: 8080

@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SinkSonic</title>
+  <link rel="stylesheet" href="/api/custom.css">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface2: #1a1a26;
+      --border: #2a2a3a;
+      --text: #e0e0f0;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --green: #00b894;
+      --red: #e17055;
+      --yellow: #fdcb6e;
+      --mono: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .header h1 { font-size: 1.5rem; font-weight: 600; color: var(--accent2); }
+    .header .status { display: flex; gap: 1rem; align-items: center; }
+    .badge {
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .badge.green { background: var(--green); color: #000; }
+    .badge.red { background: var(--red); color: #fff; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    @media (max-width: 768px) {
+      .grid { grid-template-columns: 1fr !important; }
+      body { padding: 1rem; }
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .card h2 {
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text2);
+      margin-bottom: 1rem;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label { color: var(--text2); font-size: 0.875rem; }
+    .stat-value { font-weight: 600; font-size: 0.875rem; }
+    .stream-list, .host-list { display: flex; flex-direction: column; gap: 0.75rem; }
+    .stream-item, .host-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .host-item.connected { border-color: var(--accent); }
+    .stream-header, .host-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .stream-name { font-weight: 600; font-size: 0.875rem; }
+    .host-label input {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.875rem;
+      font-family: inherit;
+      outline: none;
+      width: auto;
+      min-width: 80px;
+    }
+    .host-label input:focus { border-bottom: 1px solid var(--accent); }
+    .host-id { font-size: 0.7rem; color: var(--text2); margin-top: 0.25rem; }
+    .stream-status {
+      font-size: 0.75rem;
+      padding: 0.125rem 0.5rem;
+      border-radius: 999px;
+    }
+    .stream-status.connected { background: var(--green); color: #000; }
+    .stream-status.disconnected { background: var(--red); color: #fff; }
+    .stream-controls {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    .volume-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      outline: none;
+    }
+    .volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    .volume-value {
+      font-size: 0.75rem;
+      color: var(--text2);
+      min-width: 3rem;
+      text-align: right;
+    }
+    .btn {
+      padding: 0.375rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface2);
+      color: var(--text);
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn:hover { background: var(--accent); border-color: var(--accent); }
+    .btn.active { background: var(--accent); border-color: var(--accent); }
+    .btn-danger:hover { background: var(--red); border-color: var(--red); }
+    .btn-warn:hover { background: var(--yellow); border-color: var(--yellow); color: #000; }
+    .empty {
+      text-align: center;
+      color: var(--text2);
+      padding: 2rem;
+      font-size: 0.875rem;
+    }
+    .level-bars {
+      display: flex;
+      gap: 2px;
+      height: 40px;
+      align-items: flex-end;
+    }
+    .level-bar {
+      flex: 1;
+      background: var(--green);
+      border-radius: 2px 2px 0 0;
+      transition: height 0.1s;
+      min-height: 2px;
+    }
+    .level-bar.warning { background: var(--yellow); }
+    .level-bar.clipping { background: var(--red); }
+    .refresh { font-size: 0.75rem; color: var(--text2); }
+    .footer {
+      text-align: center;
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--text2);
+    }
+    /* Tool sections */
+    .tool-bar {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .tool-content {
+      display: none;
+    }
+    .tool-content.visible {
+      display: block;
+    }
+    .log-viewer {
+      background: #0d0d14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      line-height: 1.5;
+      color: #c8c8d8;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-viewer .highlight-pw { color: var(--green); }
+    .log-viewer .highlight-error { color: var(--red); }
+    .config-editor {
+      width: 100%;
+      min-height: 300px;
+      background: #0d0d14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: #c8c8d8;
+      resize: vertical;
+      outline: none;
+    }
+    .config-editor:focus { border-color: var(--accent); }
+    .editor-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+      justify-content: flex-end;
+    }
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: var(--accent);
+      color: #fff;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    /* Power modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.visible { display: flex; }
+    .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      min-width: 280px;
+      text-align: center;
+    }
+    .modal-box h3 { margin-bottom: 1.5rem; color: var(--text2); font-size: 1rem; }
+    .modal-actions { display: flex; gap: 1rem; justify-content: center; }
+    .modal-actions .btn { padding: 0.6rem 1.5rem; font-size: 0.9rem; }
+    .btn-poweroff:hover { background: var(--red); border-color: var(--red); }
+    .btn-reboot:hover { background: var(--yellow); border-color: var(--yellow); color: #000; }
+  </style>
+</head>
+<body>
+  <div class="header">
+  <h1>&#9835; SinkSonic</h1>
+  <div class="status">
+    <span class="badge green" id="pipewire-status">PipeWire Running</span>
+    <span class="refresh" id="last-update">--</span>
+    <button class="btn" onclick="showPowerModal()" style="font-size:1.1rem;padding:0.15rem 0.5rem;margin-left:auto;">&#9411;</button>
+  </div>
+  </div>
+
+  <!-- Power modal -->
+  <div class="modal-overlay" id="power-modal" onclick="if(event.target===this)hidePowerModal()">
+  <div class="modal-box">
+    <h3>System Power</h3>
+    <div class="modal-actions">
+      <button class="btn btn-poweroff" onclick="powerOff()">&#128683; Power Off</button>
+      <button class="btn btn-reboot" onclick="reboot()">&#8635; Reboot</button>
+      <button class="btn" onclick="hidePowerModal()">Cancel</button>
+    </div>
+  </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: 1fr 1fr 1fr;">
+    <div class="card">
+      <h2>System</h2>
+      <div id="system-stats">
+        <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" id="uptime">--</span></div>
+        <div class="stat-row"><span class="stat-label">RAM Used</span><span class="stat-value" id="ram">--</span></div>
+        <div class="stat-row"><span class="stat-label">CPU Load</span><span class="stat-value" id="cpu">--</span></div>
+        <div class="stat-row"><span class="stat-label">Temp</span><span class="stat-value" id="temp">--</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Audio Engine</h2>
+      <div id="audio-stats">
+        <div class="stat-row"><span class="stat-label">Sample Rate</span><span class="stat-value" id="samplerate">--</span></div>
+        <div class="stat-row"><span class="stat-label">Buffer Size</span><span class="stat-value" id="buffer">--</span></div>
+        <div class="stat-row"><span class="stat-label">Latency</span><span class="stat-value" id="latency">--</span></div>
+        <div class="stat-row"><span class="stat-label">Channels</span><span class="stat-value" id="channels">--</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Services <span style="color: var(--text2); font-weight:400;font-size:0.75rem">(click to restart)</span></h2>
+      <div id="services-list"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2>Output Level</h2>
+    <div class="level-bars" id="level-bars"></div>
+  </div>
+
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2>Streams <span id="stream-count" style="color: var(--accent2)">(0)</span></h2>
+    <div class="stream-list" id="stream-list">
+      <div class="empty">No streams discovered yet</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2>Known Hosts <span id="host-count" style="color: var(--accent2)">(0)</span></h2>
+    <div class="host-list" id="host-list">
+      <div class="empty">No known hosts yet. Volume settings are saved automatically.</div>
+    </div>
+  </div>
+
+  <!-- Tools -->
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2>Audio Settings</h2>
+    <div class="stat-row">
+      <span class="stat-label">Resample Quality</span>
+      <select id="setting-quality" onchange="applyQuality(this.value)" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:0.25rem 0.5rem;border-radius:4px">
+        <option value="4">4 — Medium (low CPU, OK for WiFi)</option>
+        <option value="14" selected>14 — Maximum (best quality)</option>
+      </select>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Buffer Size (frames)</span>
+      <input type="number" id="setting-buffer" min="64" max="8192" step="64" value="512" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:0.25rem 0.5rem;border-radius:4px;width:120px">
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Latency Target (ms)</span>
+      <input type="number" id="setting-latency" min="1" max="100" step="1" value="10" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:0.25rem 0.5rem;border-radius:4px;width:120px">
+    </div>
+    <div style="margin-top:0.75rem;display:flex;gap:0.5rem">
+      <button class="btn" onclick="applyAudioSettings()">Apply Now</button>
+      <button class="btn btn-warn" onclick="saveAudioSettings()">Save &amp; Reboot</button>
+    </div>
+    <div style="margin-top:0.5rem;font-size:0.75rem;color:var(--text2);font-style:italic">
+      <span id="setting-apply-note">Buffer/latency applied immediately. Quality needs reboot.</span>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h2>Tools</h2>
+    <div class="tool-bar">
+      <button class="btn" id="btn-logs" onclick="toggleLogs()">&#128214; Logs</button>
+      <button class="btn" id="btn-config" onclick="toggleConfig()">&#9881; Config</button>
+    </div>
+
+    <!-- Log viewer -->
+    <div class="tool-content" id="tool-logs">
+      <div class="log-viewer" id="log-content">Loading logs...</div>
+      <div class="editor-actions">
+        <button class="btn" onclick="refreshLogs()">&#8635; Refresh</button>
+        <button class="btn" onclick="copyLogs()">&#128203; Copy</button>
+        <button class="btn" onclick="saveLogs()">&#128190; Save as file</button>
+      </div>
+    </div>
+
+    <!-- Config editor -->
+    <div class="tool-content" id="tool-config">
+      <textarea class="config-editor" id="config-content" spellcheck="false"></textarea>
+      <div class="editor-actions">
+        <button class="btn" onclick="cancelConfig()">Cancel</button>
+        <button class="btn btn-warn" onclick="saveConfig()">Save &amp; Reboot</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    SinkSonic <span id="build-version"></span> &middot; Declarative &middot; RAM-only &middot; PipeWire
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API = '/api';
+    let streams = [];
+    let hosts = [];
+    let savedVolumes = {};
+
+    fetchJSON('/version').then(v => {
+      if (v) document.getElementById('build-version').textContent = 'v' + v.version;
+    });
+
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 3000);
+    }
+
+    async function fetchJSON(path) {
+      try {
+        const r = await fetch(API + path);
+        return await r.json();
+      } catch(e) { return null; }
+    }
+
+    function formatUptime(seconds) {
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      return d > 0 ? `${d}d ${h}h ${m}m` : `${h}h ${m}m`;
+    }
+
+    function debounce(fn, ms) {
+      let timer;
+      return function(...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), ms);
+      };
+    }
+
+    function updateServices(services) {
+      const el = document.getElementById('services-list');
+      el.innerHTML = services.map(s => {
+        const active = s.active;
+        const statusClass = active ? 'green' : 'red';
+        const statusText = active ? 'Running' : 'Stopped';
+        const pidInfo = active && s.pid > 0 ? ` PID ${s.pid}` : '';
+        return '<div class="stat-row" style="cursor:pointer" onclick="restartService(\'' + s.name + '\')" title="Click to restart">' +
+          '<span class="stat-label">' + s.name + '</span>' +
+          '<span><span class="badge ' + statusClass + '">' + statusText + '</span>' + pidInfo + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    async function restartService(name) {
+      toast('Restarting ' + name + '...');
+      await fetch(API + '/service/restart?name=' + encodeURIComponent(name), { method: 'POST' });
+    }
+
+    async function update() {
+      const [status, streamData, hostData, servicesData] = await Promise.all([
+        fetchJSON('/status'),
+        fetchJSON('/streams'),
+        fetchJSON('/hosts'),
+        fetchJSON('/services')
+      ]);
+
+      if (status) {
+        document.getElementById('uptime').textContent = formatUptime(status.uptime);
+        document.getElementById('ram').textContent = status.ram_used;
+        document.getElementById('cpu').textContent = status.cpu_load;
+        document.getElementById('temp').textContent = status.temperature;
+        document.getElementById('samplerate').textContent = status.sample_rate + ' Hz';
+        document.getElementById('buffer').textContent = status.buffer_size + ' frames';
+        document.getElementById('latency').textContent = status.latency_ms + ' ms';
+        document.getElementById('channels').textContent = status.channels;
+        document.getElementById('pipewire-status').className =
+          'badge ' + (status.pipewire_running ? 'green' : 'red');
+        document.getElementById('pipewire-status').textContent =
+          status.pipewire_running ? 'PipeWire Running' : 'PipeWire Stopped';
+        updateLevels(status.levels || []);
+      }
+
+      if (servicesData) {
+        updateServices(servicesData);
+      }
+
+      if (streamData) {
+        streams = streamData;
+        if (hostData) {
+          hosts = hostData;
+          savedVolumes = {};
+          for (const h of hosts) savedVolumes[h.id] = { volume: h.volume, muted: h.muted };
+        }
+        renderStreams(streams);
+      }
+
+      if (hostData) {
+        hosts = hostData;
+        renderHosts(hosts);
+      }
+
+      document.getElementById('last-update').textContent =
+        'Updated ' + new Date().toLocaleTimeString();
+    }
+
+    function updateLevels(levels) {
+      const container = document.getElementById('level-bars');
+      container.innerHTML = '';
+      for (let i = 0; i < 32; i++) {
+        const bar = document.createElement('div');
+        bar.className = 'level-bar';
+        const pct = levels[i] || 0;
+        bar.style.height = pct + '%';
+        if (pct > 90) bar.classList.add('clipping');
+        else if (pct > 75) bar.classList.add('warning');
+        container.appendChild(bar);
+      }
+    }
+
+    function renderStreams(streams) {
+      const container = document.getElementById('stream-list');
+      document.getElementById('stream-count').textContent = `(${streams.length})`;
+      if (streams.length === 0) {
+        container.innerHTML = '<div class="empty">No streams discovered yet</div>';
+        return;
+      }
+      container.innerHTML = streams.map(s => {
+        const label = s.known ? s.host_label : s.name;
+        return `<div class="stream-item">
+          <div class="stream-header">
+            <span class="stream-name">${escapeHtml(label)}</span>
+            <span class="stream-status ${s.connected ? 'connected' : 'disconnected'}">
+              ${s.connected ? 'Connected' : 'Disconnected'}
+            </span>
+          </div>
+          <div class="stream-controls">
+            <span style="font-size:0.75rem;color:var(--text2)">Vol</span>
+            <input type="range" class="volume-slider" min="0" max="255" value="${s.volume}"
+              oninput="this.nextElementSibling.textContent=Math.round(this.value/2.55)+'%'"
+              onchange="setVolume(${s.index}, this.value)">
+            <span class="volume-value">${Math.round(s.volume / 2.55)}%</span>
+            <button class="btn ${s.muted ? 'active' : ''}" onclick="toggleMute(${s.index})">
+              ${s.muted ? 'Unmute' : 'Mute'}
+            </button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function renderHosts(hosts) {
+      const container = document.getElementById('host-list');
+      document.getElementById('host-count').textContent = `(${hosts.length})`;
+      if (hosts.length === 0) {
+        container.innerHTML = '<div class="empty">No known hosts yet. Volume settings are saved automatically.</div>';
+        return;
+      }
+      container.innerHTML = hosts.map(h => `
+        <div class="host-item ${h.connected ? 'connected' : ''}">
+          <div class="host-header">
+            <div>
+              <div class="host-label">
+                <input type="text" value="${escapeHtml(h.label)}"
+                  onchange="updateHostLabel('${escapeHtml(h.id)}', this.value)"
+                  placeholder="Host name">
+              </div>
+              <div class="host-id">${escapeHtml(h.id)} ${h.connected ? '• connected' : ''}</div>
+            </div>
+            <span class="stream-status ${h.connected ? 'connected' : 'disconnected'}">
+              ${h.connected ? 'Connected' : 'Offline'}
+            </span>
+          </div>
+          <div class="stream-controls">
+            <span style="font-size:0.75rem;color:var(--text2)">Vol</span>
+            <input type="range" class="volume-slider" min="0" max="255" value="${h.volume}"
+              oninput="document.getElementById('hvol-${escapeHtml(h.id)}').textContent=Math.round(this.value/2.55)+'%'"
+              onchange="setHostVolume('${escapeHtml(h.id)}', this.value)">
+            <span class="volume-value" id="hvol-${escapeHtml(h.id)}">${Math.round(h.volume / 2.55)}%</span>
+            <button class="btn ${h.muted ? 'active' : ''}" onclick="toggleHostMute('${escapeHtml(h.id)}')">
+              ${h.muted ? 'Unmuted' : 'Muted'}
+            </button>
+            <button class="btn btn-danger" onclick="deleteHost('${escapeHtml(h.id)}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Stream controls
+    async function setVolume(index, value) {
+      await fetch(API + '/stream/set-volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index: parseInt(index), volume: parseInt(value) })
+      });
+      update();
+    }
+
+    async function toggleMute(index) {
+      await fetch(API + '/stream/set-mute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index: parseInt(index) })
+      });
+      update();
+    }
+
+    // Host controls
+    const saveHostsDebounced = debounce(async function() {
+      const items = document.querySelectorAll('.host-item');
+      const updated = [];
+      for (const item of items) {
+        const id = item.querySelector('.host-id').textContent.split(' ')[0];
+        const input = item.querySelector('.host-label input');
+        const slider = item.querySelector('.volume-slider');
+        const btn = item.querySelector('.btn');
+        updated.push({
+          id: id,
+          label: input ? input.value : id,
+          volume: slider ? parseInt(slider.value) : 128,
+          muted: btn ? btn.classList.contains('active') : false
+        });
+      }
+      await fetch(API + '/hosts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated)
+      });
+    }, 500);
+
+    async function setHostVolume(id, value) {
+      const stream = streams.find(s => s.host_id === id);
+      if (stream) await setVolume(stream.index, parseInt(value));
+      saveHostsDebounced();
+    }
+
+    async function toggleHostMute(id) {
+      const stream = streams.find(s => s.host_id === id);
+      if (stream) await toggleMute(stream.index);
+      saveHostsDebounced();
+    }
+
+    function updateHostLabel(id, newLabel) { saveHostsDebounced(); }
+
+    async function deleteHost(id) {
+      if (!confirm(`Delete host "${id}"?`)) return;
+      hosts = hosts.filter(h => h.id !== id);
+      await fetch(API + '/hosts', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(hosts.map(h => ({ id: h.id, label: h.label, volume: h.volume, muted: h.muted })))
+      });
+      update();
+    }
+
+    // Log viewer
+    let logsVisible = false;
+    async function toggleLogs() {
+      logsVisible = !logsVisible;
+      document.getElementById('tool-logs').classList.toggle('visible', logsVisible);
+      document.getElementById('btn-logs').classList.toggle('active', logsVisible);
+      if (logsVisible) await refreshLogs();
+    }
+
+    async function refreshLogs() {
+      const el = document.getElementById('log-content');
+      el.textContent = 'Loading logs...';
+      try {
+        const r = await fetch(API + '/logs');
+        el.textContent = await r.text();
+      } catch(e) {
+        el.textContent = 'Failed to load logs: ' + e;
+      }
+    }
+
+    function copyLogs() {
+      const text = document.getElementById('log-content').textContent;
+      navigator.clipboard.writeText(text).then(() => toast('Logs copied')).catch(() => toast('Copy failed'));
+    }
+
+    function saveLogs() {
+      const text = document.getElementById('log-content').textContent;
+      const blob = new Blob([text], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `sinksonic-logs-${new Date().toISOString().slice(0,10)}.txt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Logs saved');
+    }
+
+    // Config editor
+    let configVisible = false;
+    let originalConfig = '';
+    async function toggleConfig() {
+      configVisible = !configVisible;
+      document.getElementById('tool-config').classList.toggle('visible', configVisible);
+      document.getElementById('btn-config').classList.toggle('active', configVisible);
+      if (configVisible) await loadConfig();
+    }
+
+    async function loadConfig() {
+      const el = document.getElementById('config-content');
+      el.value = 'Loading...';
+      try {
+        const r = await fetch(API + '/config');
+        originalConfig = await r.text();
+        el.value = originalConfig;
+      } catch(e) {
+        el.value = 'Failed to load config: ' + e;
+      }
+    }
+
+    function cancelConfig() {
+      document.getElementById('config-content').value = originalConfig;
+      toast('Changes discarded');
+    }
+
+    async function saveConfig() {
+      const content = document.getElementById('config-content').value;
+      try {
+        const r = await fetch(API + '/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/yaml' },
+          body: content
+        });
+        const result = await r.json();
+        if (result.status === 'saved') {
+          toast('Config saved, rebooting...');
+          await fetch(API + '/reboot', { method: 'POST' });
+        } else {
+          toast('Save failed');
+        }
+      } catch(e) {
+        toast('Save failed: ' + e);
+      }
+    }
+
+    // Audio settings
+    async function applyAudioSettings() {
+      const buf = document.getElementById('setting-buffer').value;
+      const lat = document.getElementById('setting-latency').value;
+      try {
+        await fetch(API + '/apply-settings?' + new URLSearchParams({ buffer: buf, latency: lat }), { method: 'POST' });
+        toast('Settings applied');
+      } catch(e) {
+        toast('Apply failed: ' + e);
+      }
+    }
+    async function saveAudioSettings() {
+      // Write to config and reboot
+      const q = document.getElementById('setting-quality').value;
+      const buf = document.getElementById('setting-buffer').value;
+      const lat = document.getElementById('setting-latency').value;
+      toast('Writing config and rebooting...');
+      try {
+        const r = await fetch(API + '/config');
+        let yaml = await r.text();
+        // Replace values if key exists, otherwise append to audio section
+        const setKey = (key, val) => {
+          const re = new RegExp('^(' + key + ':) *.*', 'm');
+          if (re.test(yaml)) {
+            yaml = yaml.replace(re, '$1 ' + val);
+          } else {
+            yaml = yaml.replace(/^audio:/, 'audio:\n  ' + key + ': ' + val);
+          }
+        };
+        setKey('resample_quality', q);
+        setKey('buffer_size', buf);
+        setKey('latency_target_ms', lat);
+        await fetch(API + '/config', { method: 'PUT', headers: { 'Content-Type': 'text/yaml' }, body: yaml });
+        await fetch(API + '/reboot', { method: 'POST' });
+      } catch(e) {
+        toast('Save failed: ' + e);
+      }
+    }
+    async function loadAudioSettings() {
+      try {
+        const r = await fetch(API + '/config');
+        const yaml = await r.text();
+        const q = yaml.match(/resample_quality:\s*(\d+)/);
+        const buf = yaml.match(/buffer_size:\s*(\d+)/);
+        const lat = yaml.match(/latency_target_ms:\s*(\d+)/);
+        if (q) document.getElementById('setting-quality').value = q[1];
+        if (buf) document.getElementById('setting-buffer').value = buf[1];
+        if (lat) document.getElementById('setting-latency').value = lat[1];
+      } catch(e) {}
+    }
+
+    // Power modal
+    function showPowerModal() { document.getElementById('power-modal').classList.add('visible'); }
+    function hidePowerModal() { document.getElementById('power-modal').classList.remove('visible'); }
+    async function powerOff() {
+      hidePowerModal();
+      toast('Powering off...');
+      await fetch(API + '/poweroff', { method: 'POST' });
+    }
+    async function reboot() {
+      hidePowerModal();
+      toast('Rebooting...');
+      await fetch(API + '/reboot', { method: 'POST' });
+    }
+
+    // Init
+    update();
+    loadAudioSettings();
+    setInterval(update, 2000);
+  </script>
+</body>
+</html>

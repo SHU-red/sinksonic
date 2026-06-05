@@ -1,0 +1,22 @@
+# Build artifacts
+.build/
+result
+result-dev
+*.img
+*.xz
+*.bin
+
+# Go
+webui/go.sum
+webui/mixer-webui
+webui/webui
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
