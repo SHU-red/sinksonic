@@ -587,8 +587,11 @@
       container.innerHTML = hosts.map(h => {
         // Find matching stream for richer info
         const stream = streams.find(s => s.host_id === h.id);
-        const healthClass = h.connected ? (stream && stream.health === 'good' ? 'health-good' : (stream && stream.health === 'fair' ? 'health-fair' : 'health-good')) : 'health-poor';
-        const healthLabel = h.connected ? (stream && stream.health === 'good' ? '\u25cf Stable' : (stream && stream.health === 'fair' ? '\u25cb Idle' : '\u25cf Stable')) : '\u2717 Offline';
+        const healthClass = h.connected ? (stream && stream.health === 'good' ? 'health-good' : (stream && stream.health === 'fair' ? 'health-fair' : 'health-poor')) : 'health-poor';
+        const healthLabel = h.connected
+          ? (stream && stream.health === 'good' ? '\u25cf Stable'
+            : (stream && stream.health === 'fair' ? '\u25cb Idle' : '\u2717 Poor'))
+          : '\u2717 Offline';
         const healthTip = stream
           ? (stream.health === 'good'
             ? 'Audio flowing normally \u2014 stream is active and stable'
@@ -626,7 +629,7 @@
               onchange="setHostVolume('${escapeHtml(h.id)}', this.value)">
             <span class="volume-value" id="hvol-${escapeHtml(h.id)}">${Math.round(h.volume / 2.55)}%</span>
             <button class="btn ${h.muted ? 'active' : ''}" onclick="toggleHostMute('${escapeHtml(h.id)}')">
-              ${h.muted ? 'Unmuted' : 'Muted'}
+              ${h.muted ? 'Unmute' : 'Mute'}
             </button>
             <button class="btn btn-danger" onclick="deleteHost('${escapeHtml(h.id)}')">Delete</button>
           </div>

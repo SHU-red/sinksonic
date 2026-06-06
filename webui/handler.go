@@ -349,11 +349,9 @@ func isPipeWireRunning() bool {
 // getStreamNodeInfo calls pw-dump once and returns a map of nodeID -> node info
 // This replaces N individual wpctl inspect calls with one fast JSON call.
 type streamNodeInfo struct {
-	nodeName    string
-	state       string
-	sampleRate  string
-	channels    string
-	audioFormat string
+	nodeName   string
+	state      string
+	sinkFormat string // combined format from ALSA sink, e.g. "S16LE 2ch 48000Hz"
 }
 
 func getStreamNodeInfo() map[string]streamNodeInfo {
@@ -445,7 +443,7 @@ func getStreamNodeInfo() map[string]streamNodeInfo {
 		if formatStr != "" {
 			for id := range result {
 				entry := result[id]
-				entry.sampleRate = formatStr
+				entry.sinkFormat = formatStr
 				result[id] = entry
 			}
 		}
@@ -547,7 +545,7 @@ func parseWpctlStatus() []StreamResponse {
 		ni := nodeInfo[nodeID]
 		nodeName := ni.nodeName
 		state := ni.state
-		formatStr := ni.sampleRate  // holds combined format from ALSA sink
+		formatStr := ni.sinkFormat  // combined format from ALSA sink
 		if nodeName == "" {
 			nodeName = name
 		}
