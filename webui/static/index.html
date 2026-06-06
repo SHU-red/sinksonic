@@ -154,6 +154,16 @@
     .btn.active { background: var(--accent); border-color: var(--accent); }
     .btn-danger:hover { background: var(--red); border-color: var(--red); }
     .btn-warn:hover { background: var(--yellow); border-color: var(--yellow); color: #000; }
+    .health-badge {
+      font-size: 0.7rem;
+      padding: 0.125rem 0.5rem;
+      border-radius: 999px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .health-badge.health-good { background: rgba(0,184,148,0.15); color: var(--green); border: 1px solid var(--green); }
+    .health-badge.health-fair { background: rgba(253,203,110,0.15); color: var(--yellow); border: 1px solid var(--yellow); }
+    .health-badge.health-poor { background: rgba(225,112,85,0.15); color: var(--red); border: 1px solid var(--red); }
     .empty {
       text-align: center;
       color: var(--text2);
@@ -371,6 +381,7 @@
     <div class="tool-bar">
       <button class="btn" id="btn-logs" onclick="toggleLogs()">&#128214; Logs</button>
       <button class="btn" id="btn-config" onclick="toggleConfig()">&#9881; Config</button>
+      <a href="/setup.html" class="btn" style="text-decoration:none" target="_blank">&#128295; Setup</a>
     </div>
 
     <!-- Log viewer -->
@@ -527,12 +538,24 @@
       }
       container.innerHTML = streams.map(s => {
         const label = s.known ? s.host_label : s.name;
+        const healthClass = s.health === 'good' ? 'health-good' : (s.health === 'fair' ? 'health-fair' : 'health-poor');
+        const healthLabel = s.health === 'good' ? '\u25cf Stable' : (s.health === 'fair' ? '\u25cb Idle' : '\u2717 Poor');
+        const healthTip = s.health === 'good'
+          ? 'Audio flowing normally \u2014 stream is active and stable'
+          : (s.health === 'fair'
+            ? 'Connected but idle \u2014 no audio currently flowing through this stream'
+            : 'Unstable or disconnected \u2014 stream is corked, suspended, or has an unknown state');
+        const formatInfo = s.format ? s.format : '';
         return `<div class="stream-item">
           <div class="stream-header">
-            <span class="stream-name">${escapeHtml(label)}</span>
-            <span class="stream-status ${s.connected ? 'connected' : 'disconnected'}">
+            <div>
+              <span class="stream-name">${escapeHtml(label)}</span>
+              <span style="font-size:0.7rem;color:var(--text2);margin-left:0.5rem">${escapeHtml(formatInfo)}</span>
+            </div>
+            <span class="stream-status ${s.connected ? 'connected' : 'disconnected'}" style="margin-right:0.5rem">
               ${s.connected ? 'Connected' : 'Disconnected'}
             </span>
+            <span class="health-badge ${healthClass}" title="${healthTip}">${healthLabel}</span>
           </div>
           <div class="stream-controls">
             <span style="font-size:0.75rem;color:var(--text2)">Vol</span>
@@ -561,7 +584,21 @@
         container.innerHTML = '<div class="empty">No known hosts yet. Volume settings are saved automatically.</div>';
         return;
       }
-      container.innerHTML = hosts.map(h => `
+      container.innerHTML = hosts.map(h => {
+        // Find matching stream for richer info
+        const stream = streams.find(s => s.host_id === h.id);
+        const healthClass = h.connected ? (stream && stream.health === 'good' ? 'health-good' : (stream && stream.health === 'fair' ? 'health-fair' : 'health-good')) : 'health-poor';
+        const healthLabel = h.connected ? (stream && stream.health === 'good' ? '\u25cf Stable' : (stream && stream.health === 'fair' ? '\u25cb Idle' : '\u25cf Stable')) : '\u2717 Offline';
+        const healthTip = stream
+          ? (stream.health === 'good'
+            ? 'Audio flowing normally \u2014 stream is active and stable'
+            : (stream.health === 'fair'
+              ? 'Connected but idle \u2014 no audio currently flowing'
+              : 'Unstable or disconnected'))
+          : (h.connected ? 'Connected, no stream data' : 'Host is offline');
+        const formatInfo = stream && stream.format ? stream.format : '';
+        const stateLabel = stream && stream.state ? stream.state : '';
+        return `
         <div class="host-item ${h.connected ? 'connected' : ''}">
           <div class="host-header">
             <div>
@@ -570,11 +607,17 @@
                   onchange="updateHostLabel('${escapeHtml(h.id)}', this.value)"
                   placeholder="Host name">
               </div>
-              <div class="host-id">${escapeHtml(h.id)} ${h.connected ? '• connected' : ''}</div>
+              <div class="host-id">${escapeHtml(h.id)} ${h.connected ? '\u2022 connected' : ''}</div>
+              <div style="font-size:0.7rem;color:var(--text2);margin-top:0.25rem">
+                ${escapeHtml(formatInfo)}${formatInfo && stateLabel ? ' &middot; ' : ''}${escapeHtml(stateLabel)}
+              </div>
             </div>
-            <span class="stream-status ${h.connected ? 'connected' : 'disconnected'}">
-              ${h.connected ? 'Connected' : 'Offline'}
-            </span>
+            <div style="display:flex;align-items:center;gap:0.5rem">
+              <span class="health-badge ${healthClass}" title="${healthTip}">${healthLabel}</span>
+              <span class="stream-status ${h.connected ? 'connected' : 'disconnected'}">
+                ${h.connected ? 'Connected' : 'Offline'}
+              </span>
+            </div>
           </div>
           <div class="stream-controls">
             <span style="font-size:0.75rem;color:var(--text2)">Vol</span>
@@ -587,8 +630,8 @@
             </button>
             <button class="btn btn-danger" onclick="deleteHost('${escapeHtml(h.id)}')">Delete</button>
           </div>
-        </div>
-      `).join('');
+        </div>`;
+      }).join('');
     }
 
     // Stream controls

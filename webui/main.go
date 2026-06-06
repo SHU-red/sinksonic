@@ -48,6 +48,9 @@ func main() {
 	mux.HandleFunc("/api/services", apiServices)
 	mux.HandleFunc("/api/service/restart", apiServiceRestart)
 	mux.HandleFunc("/api/apply-settings", apiApplySettings)
+	mux.HandleFunc("/api/setup", apiSetup)
+	mux.HandleFunc("/api/hostname", apiHostname)
+	mux.HandleFunc("/api/setup/linux/script", apiLinuxSetupScript)
 
 	server := &http.Server{
 		Addr:         listenAddr,

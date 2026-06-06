@@ -150,6 +150,9 @@ type StreamResponse struct {
 	HostID    string `json:"host_id"`
 	HostLabel string `json:"host_label"`
 	Known     bool   `json:"known"`
+	State     string `json:"state"`      // "active", "idle", "corked"
+	Format    string `json:"format"`     // e.g. "s16le 2ch 48000Hz"
+	Health    string `json:"health"`     // "good", "fair", "poor"
 }
 
 type VolumeRequest struct {
@@ -430,6 +433,10 @@ func parseWpctlStatus() []StreamResponse {
 
 		// Get node.name from wpctl inspect
 		nodeName := ""
+		state := "unknown"
+		sampleRate := ""
+		channels := ""
+		audioFormat := ""
 		inspOut, inspErr := runCmd(3*time.Second, "wpctl", "inspect", nodeID)
 		if inspErr == nil {
 			for _, vline := range strings.Split(inspOut, "\n") {
@@ -440,10 +447,79 @@ func parseWpctlStatus() []StreamResponse {
 						nodeName = strings.Trim(strings.TrimSpace(eqParts[1]), "\"")
 					}
 				}
+				if strings.Contains(tv, "state") && strings.Contains(tv, "=") && !strings.Contains(tv, "session") {
+					// Match node.state or just state property
+					eqParts := strings.SplitN(tv, "=", 2)
+					if len(eqParts) == 2 {
+						val := strings.TrimSpace(strings.Trim(eqParts[1], "\""))
+						if val != "" {
+							state = val
+						}
+					}
+				}
+				if strings.Contains(tv, "audio.rate") && strings.Contains(tv, "=") {
+					eqParts := strings.SplitN(tv, "=", 2)
+					if len(eqParts) == 2 {
+						sampleRate = strings.TrimSpace(eqParts[1])
+					}
+				}
+				if strings.Contains(tv, "audio.channels") && strings.Contains(tv, "=") && !strings.Contains(tv, "max") {
+					eqParts := strings.SplitN(tv, "=", 2)
+					if len(eqParts) == 2 {
+						channels = strings.TrimSpace(eqParts[1])
+					}
+				}
+				if strings.Contains(tv, "audio.format") && strings.Contains(tv, "=") {
+					eqParts := strings.SplitN(tv, "=", 2)
+					if len(eqParts) == 2 {
+						audioFormat = strings.Trim(strings.TrimSpace(eqParts[1]), "\"")
+					}
+				}
 			}
 		}
 		if nodeName == "" {
 			nodeName = name
+		}
+
+		// Build format string
+		formatStr := ""
+		if audioFormat != "" {
+			formatStr = audioFormat
+		}
+		if channels != "" {
+			if formatStr != "" {
+				formatStr += " " + channels + "ch"
+			} else {
+				formatStr = channels + "ch"
+			}
+		}
+		if sampleRate != "" {
+			if formatStr != "" {
+				formatStr += " " + sampleRate + "Hz"
+			} else {
+				formatStr = sampleRate + "Hz"
+			}
+		}
+
+		// Compute health from node state
+		// PipeWire node states:
+		//   running/active  = audio flowing normally     → good
+		//   idle/suspended  = connected but silent       → fair
+		//   corked/unknown  = disconnected or paused     → poor
+		health := "good"
+		switch state {
+		case "running", "active":
+			health = "good"
+		case "idle", "suspended":
+			health = "fair"
+		default:
+			health = "poor"
+		}
+
+		// Friendly state label
+		friendlyState := state
+		if state == "running" {
+			friendlyState = "active"
 		}
 
 		// Match against known hosts
@@ -470,6 +546,9 @@ func parseWpctlStatus() []StreamResponse {
 			HostID:    hostID,
 			HostLabel: hostLabel,
 			Known:     known,
+			State:     friendlyState,
+			Format:    formatStr,
+			Health:    health,
 		})
 		idx++
 	}
@@ -865,6 +944,131 @@ func apiApplySettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]string{"status": "applied"})
+}
+
+// apiSetup returns setup scripts for various client OSes.
+func apiSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hostname := getHostname()
+	type setupEntry struct {
+		OS          string `json:"os"`
+		Label       string `json:"label"`
+		Script      string `json:"script"`
+		Shell       string `json:"shell"`
+		Description string `json:"description"`
+	}
+	entries := []setupEntry{
+		{
+			OS: "linux", Label: "Linux (PipeWire)", Shell: "bash",
+			Description: "Creates a persistent PulseAudio tunnel sink to SinkSonic. Audio appears as a selectable output device.",
+			Script: fmt.Sprintf(`#!/bin/bash
+# SinkSonic tunnel — Linux (PipeWire)
+set -euo pipefail
+PI_HOST="%[1]s"
+# Remove stale modules
+pactl list modules short 2>/dev/null | grep module-tunnel-sink | awk '{print $1}' | while read idx; do
+  pactl unload-module "$$idx" 2>/dev/null || true
+done 2>/dev/null || true
+# Create tunnel
+pactl load-module module-tunnel-sink \
+  server=tcp:"$$PI_HOST":4713 \
+  sink_name=sinksonic-tunnel \
+  sink_properties=device.description=SinkSonic
+sleep 1
+pactl set-default-sink sinksonic-tunnel 2>/dev/null || true
+echo "SinkSonic tunnel created → $$PI_HOST"`, hostname),
+		},
+		{
+			OS: "macos", Label: "macOS (Homebrew)", Shell: "bash",
+			Description: "Requires PulseAudio from Homebrew. Tunnel sink forwards audio to SinkSonic.",
+			Script: fmt.Sprintf(`#!/bin/bash
+# SinkSonic tunnel — macOS (Homebrew PulseAudio)
+brew install pulseaudio 2>/dev/null || true
+brew services start pulseaudio 2>/dev/null || true
+sleep 2
+PI_HOST="%[1]s"
+pactl load-module module-tunnel-sink \
+  server=tcp:"$$PI_HOST":4713 \
+  sink_name=sinksonic-tunnel \
+  sink_properties=device.description=SinkSonic
+echo "SinkSonic tunnel created → $$PI_HOST"`, hostname),
+		},
+		{
+			OS: "windows", Label: "Windows (PulseAudio/WSL)", Shell: "powershell",
+			Description: "Use PulseAudio for Windows or follow the WSL2 approach.",
+			Script: fmt.Sprintf(`# SinkSonic tunnel — Windows (WSL2)
+# 1. Add Pi to WSL2 hosts file:
+echo "%[1]s sinksonic.local" | sudo tee -a /etc/hosts
+
+# 2. Run the Linux setup inside WSL2:
+#    Follow the linux tab instructions`, "192.168.178.160"),
+		},
+		{
+			OS: "android", Label: "Android (AudioRelay)", Shell: "",
+			Description: "Use AudioRelay app to stream Android audio to a desktop server that feeds SinkSonic.",
+			Script: "See setup.sinksonic.local/setup for full instructions",
+		},
+		{
+			OS: "ios", Label: "iOS (AirPlay)", Shell: "",
+			Description: "If Shairport Sync is running on the Pi, select SinkSonic from AirPlay in Control Center.",
+			Script: "See setup.sinksonic.local/setup for full instructions",
+		},
+	}
+	writeJSON(w, entries)
+}
+
+// apiHostname returns the Pi's hostname for setup pages.
+func apiHostname(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]string{"hostname": getHostname()})
+}
+
+// apiLinuxSetupScript returns a raw shell script for Linux desktop setup.
+func apiLinuxSetupScript(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hostname := getHostname()
+	script := fmt.Sprintf(`#!/bin/bash
+# SinkSonic persistent tunnel — Linux (PipeWire)
+# Run this once, then select "SinkSonic" in your sound settings.
+set -euo pipefail
+PI_HOST="%[1]s"
+
+# Remove stale modules
+pactl list modules short 2>/dev/null | grep module-tunnel-sink | awk '{print $1}' | while read idx; do
+  pactl unload-module "$$idx" 2>/dev/null || true
+done 2>/dev/null || true
+
+# Create tunnel sink
+pactl load-module module-tunnel-sink \
+  server=tcp:"$$PI_HOST":4713 \
+  sink_name=sinksonic-tunnel \
+  sink_properties=device.description=SinkSonic
+
+sleep 1
+
+# Set as default
+pactl set-default-sink sinksonic-tunnel 2>/dev/null || true
+echo "SinkSonic tunnel active → $$PI_HOST"
+`, hostname)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(script))
+}
+
+func getHostname() string {
+	out, err := runCmd(2*time.Second, "hostname")
+	if err != nil || out == "" {
+		return "sinksonic.local"
+	}
+	return out + ".local"
 }
 
 // apiReboot triggers a system reboot.

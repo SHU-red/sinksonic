@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SinkSonic — Setup</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface2: #1a1a26;
+      --border: #2a2a3a;
+      --text: #e0e0f0;
+      --text2: #8888a0;
+      --accent: #6c5ce7;
+      --accent2: #a29bfe;
+      --green: #00b894;
+      --red: #e17055;
+      --yellow: #fdcb6e;
+      --mono: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .header h1 { font-size: 1.5rem; font-weight: 600; color: var(--accent2); }
+    .header a {
+      color: var(--text2);
+      text-decoration: none;
+      font-size: 0.875rem;
+    }
+    .header a:hover { color: var(--accent2); }
+
+    .tabs {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      padding: 0.6rem 1.2rem;
+      border: 1px solid var(--border);
+      border-radius: 8px 8px 0 0;
+      background: var(--surface);
+      color: var(--text2);
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .tab-btn:hover { color: var(--text); background: var(--surface2); }
+    .tab-btn.active {
+      background: var(--surface2);
+      color: var(--accent2);
+      border-color: var(--accent);
+      border-bottom-color: var(--surface2);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .card h2 {
+      font-size: 1rem;
+      color: var(--accent2);
+      margin-bottom: 1rem;
+    }
+    .card h3 {
+      font-size: 0.875rem;
+      color: var(--text);
+      margin: 1.5rem 0 0.5rem;
+    }
+    .card p, .card li {
+      font-size: 0.875rem;
+      color: var(--text2);
+      line-height: 1.6;
+    }
+    .card ul { padding-left: 1.5rem; }
+    .card li { margin-bottom: 0.25rem; }
+
+    .code-block {
+      background: #0d0d14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.5;
+      color: #c8c8d8;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin: 0.75rem 0;
+      position: relative;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.3rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface2);
+      color: var(--text2);
+      font-size: 0.7rem;
+      cursor: pointer;
+    }
+    .copy-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    .platform-note {
+      padding: 0.75rem;
+      background: var(--surface2);
+      border-left: 3px solid var(--yellow);
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: var(--text2);
+      margin: 0.75rem 0;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 2rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--text2);
+    }
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: var(--accent);
+      color: #fff;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    @media (max-width: 768px) {
+      body { padding: 1rem; }
+      .tabs { flex-direction: column; }
+      .tab-btn { border-radius: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>&#9881; SinkSonic Setup</h1>
+    <a href="/">&larr; Back to Dashboard</a>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab-btn active" onclick="switchTab('linux')">&#127760; Linux</button>
+    <button class="tab-btn" onclick="switchTab('macos')">&#63743; macOS</button>
+    <button class="tab-btn" onclick="switchTab('windows')">&#9866; Windows</button>
+    <button class="tab-btn" onclick="switchTab('android')">&#128241; Android</button>
+    <button class="tab-btn" onclick="switchTab('ios')">&#64038; iOS</button>
+  </div>
+
+  <!-- Linux -->
+  <div class="tab-content active" id="tab-linux">
+    <div class="card">
+      <h2>Linux (PipeWire)</h2>
+      <p>Create a network tunnel that forwards local audio to the SinkSonic Pi over TCP. The script runs as a persistent systemd user service and auto-reconnects.</p>
+
+      <h3>One-liner Setup</h3>
+      <div class="code-block" id="linux-script-lines">Loading...</div>
+
+      <h3>Or manually</h3>
+      <p>Create the script:</p>
+      <div class="code-block">
+mkdir -p ~/.local/bin
+curl -o ~/.local/bin/sinksonic-sink.sh http://<span class="host-placeholder">sinksonic.local</span>/api/setup/linux
+chmod +x ~/.local/bin/sinksonic-sink.sh</div>
+
+      <p>Create the systemd service:</p>
+      <div class="code-block">
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/sinksonic-sink.service &lt;&lt; 'EOF'
+[Unit]
+Description=SinkSonic — network audio tunnel to Pi
+After=pipewire-pulse.service network-online.target
+Wants=pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/sinksonic-sink.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now sinksonic-sink.service</div>
+
+      <h3>Verify</h3>
+      <p>Select <strong>"SinkSonic"</strong> in your sound settings, or test with:</p>
+      <div class="code-block">pactl list sinks short | grep sinksonic
+# Look for sinksonic-tunnel in the output
+
+# Test audio
+PULSE_SINK=sinksonic-tunnel speaker-test -c 2 -l 1 -t sine</div>
+    </div>
+  </div>
+
+  <!-- macOS -->
+  <div class="tab-content" id="tab-macos">
+    <div class="card">
+      <h2>macOS</h2>
+      <div class="platform-note">
+        macOS does not natively support PulseAudio. You need to install additional software.
+      </div>
+
+      <h3>Option 1: PulseAudio (Homebrew)</h3>
+      <div class="code-block">brew install pulseaudio
+brew services start pulseaudio
+
+# Load the tunnel sink
+pactl load-module module-tunnel-sink \
+  server=tcp:sinksonic.local:4713 \
+  sink_name=sinksonic-tunnel \
+  sink_properties=device.description=SinkSonic
+
+# Set as default
+pactl set-default-sink sinksonic-tunnel</div>
+
+      <h3>Option 2: OBS + PipeWire (via MacPorts)</h3>
+      <p>Route application audio through OBS with the PipeWire plugin to the SinkSonic network sink.</p>
+
+      <h3>Test audio</h3>
+      <div class="code-block"># Use audacity or any media player that can select an audio output
+# Select "SinkSonic" as the output device</div>
+    </div>
+  </div>
+
+  <!-- Windows -->
+  <div class="tab-content" id="tab-windows">
+    <div class="card">
+      <h2>Windows</h2>
+      <div class="platform-note">
+        Windows does not natively support PulseAudio. Use one of these approaches.
+      </div>
+
+      <h3>Option 1: PulseAudio for Windows</h3>
+      <div class="code-block"># Download PulseAudio for Windows:
+# https://www.freedesktop.org/wiki/Software/PulseAudio/Ports/Win32/
+
+# Install and run pulseaudio.exe, then in a command prompt:
+pactl load-module module-tunnel-sink \
+  server=tcp:sinksonic.local:4713 \
+  sink_name=sinksonic-tunnel \
+  sink_properties=device.description=SinkSonic</div>
+
+      <h3>Option 2: WSL2 with PipeWire</h3>
+      <p>Run the Linux setup inside WSL2 and use <code>mDNS</code> forwarding to reach <code>sinksonic.local</code>.</p>
+
+      <div class="code-block"># In WSL2, follow the Linux setup instructions above
+# Note: you may need to forward mDNS:
+echo "192.168.178.160 sinksonic.local" | sudo tee -a /etc/hosts</div>
+
+      <h3>Option 3: OBS with audio routing</h3>
+      <p>Use <a href="https://vb-audio.com/Voicemeeter/" style="color:var(--accent2)">Voicemeeter</a> to route system audio to a virtual cable, then OBS with the PulseAudio plugin to stream to SinkSonic.</p>
+    </div>
+  </div>
+
+  <!-- Android -->
+  <div class="tab-content" id="tab-android">
+    <div class="card">
+      <h2>Android</h2>
+      <div class="platform-note">
+        Android audio routing to network sinks requires third-party apps.
+      </div>
+
+      <h3>Option 1: AudioRelay (recommended)</h3>
+      <p><a href="https://audiorelay.net/" style="color:var(--accent2)">AudioRelay</a> streams Android audio to a server on your PC. The server then forwards to SinkSonic via the Linux desktop tunnel.</p>
+
+      <h3>Option 2: SoundWire</h3>
+      <p><a href="https://soundwire.softick.com/" style="color:var(--accent2)">SoundWire</a> streams from Android to a Windows/Linux server. Works together with the desktop tunnel.</p>
+
+      <div class="code-block"># On the desktop (Linux), after creating the SinkSonic tunnel:
+# Install the SoundWire server, configure it to output to SinkSonic
+# Then connect your Android device to the SoundWire server</div>
+
+      <h3>Option 3: Snapcast</h3>
+      <p><a href="https://github.com/badaix/snapcast" style="color:var(--accent2)">Snapcast</a> is an open-source multi-room audio system. Run the Snapserver on the Pi and connect Android via the Snapcast app.</p>
+    </div>
+  </div>
+
+  <!-- iOS -->
+  <div class="tab-content" id="tab-ios">
+    <div class="card">
+      <h2>iOS</h2>
+      <div class="platform-note">
+        iOS severely restricts audio routing. AirPlay is the most practical option.
+      </div>
+
+      <h3>Option 1: AirPlay (if enabled on the Pi)</h3>
+      <p>If Shairport Sync is running on the Pi:</p>
+      <div class="code-block">1. Open Control Center on iOS
+2. Tap the AirPlay icon
+3. Select "SinkSonic" from the list
+4. All device audio now streams to the Pi</div>
+
+      <h3>Option 2: OBS + Camera app</h3>
+      <p>Use the OBS Camera app to capture iOS audio and forward via network to a server that feeds SinkSonic.</p>
+
+      <h3>Option 3: RTP Middleware</h3>
+      <p>Use a third-party RTP streaming app that can forward to a configurable network endpoint.</p>
+
+      <div class="code-block"># Pi-side: netcat can receive raw PCM
+# Not recommended for daily use — AirPlay is far better
+nc -l -p 5000 | pacat --rate=44100 --channels=2 --format=s16le</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="/" style="color:var(--text2);text-decoration:none">&larr; Back to SinkSonic Dashboard</a>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.querySelector(`.tab-btn[onclick*="${name}"]`).classList.add('active');
+      document.getElementById('tab-' + name).classList.add('active');
+    }
+
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 3000);
+    }
+
+    function copyCode(btn) {
+      const code = btn.parentElement.textContent.replace('Copy', '').trim();
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent = 'Copied!';
+        toast('Copied to clipboard');
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+      });
+    }
+
+    // Add copy buttons to code blocks
+    document.querySelectorAll('.code-block').forEach(block => {
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = 'Copy';
+      btn.onclick = () => copyCode(btn);
+      block.appendChild(btn);
+    });
+
+    // Fetch script from API and populate the one-liner
+    fetch('/api/setup/linux/script')
+      .then(r => r.text())
+      .then(script => {
+        const el = document.getElementById('linux-script-lines');
+        if (script) el.textContent = script;
+        else el.textContent = '# Run this on your Linux desktop:\n# (script not available, see manual instructions below)';
+      })
+      .catch(() => {
+        document.getElementById('linux-script-lines').textContent = '# Could not load script from Pi';
+      });
+
+    // Update hostname placeholders
+    fetch('/api/hostname')
+      .then(r => r.json())
+      .then(d => {
+        if (d.hostname) {
+          document.querySelectorAll('.host-placeholder').forEach(el => { el.textContent = d.hostname; });
+        }
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>
