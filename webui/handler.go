@@ -346,11 +346,123 @@ func isPipeWireRunning() bool {
 
 // --- Stream parsing ---
 
+// getStreamNodeInfo calls pw-dump once and returns a map of nodeID -> node info
+// This replaces N individual wpctl inspect calls with one fast JSON call.
+type streamNodeInfo struct {
+	nodeName    string
+	state       string
+	sampleRate  string
+	channels    string
+	audioFormat string
+}
+
+func getStreamNodeInfo() map[string]streamNodeInfo {
+	dump, err := runCmd(5*time.Second, "pw-dump")
+	if err != nil {
+		return nil
+	}
+
+	var objects []struct {
+		ID   int    `json:"id"`
+		Type string `json:"type"`
+		Info *struct {
+			Props map[string]interface{} `json:"props"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal([]byte(dump), &objects); err != nil {
+		return nil
+	}
+
+	result := make(map[string]streamNodeInfo)
+	for _, obj := range objects {
+		if obj.Info == nil || obj.Info.Props == nil {
+			continue
+		}
+		props := obj.Info.Props
+
+		// Only audio stream nodes (sink-inputs from remote clients)
+		mediaClass, _ := props["media.class"].(string)
+		if !strings.Contains(mediaClass, "Stream/Output/Audio") {
+			continue
+		}
+
+		nodeID := strconv.Itoa(obj.ID)
+		info := streamNodeInfo{}
+
+		if n, ok := props["node.name"].(string); ok {
+			info.nodeName = n
+		}
+		if info.nodeName == "" {
+			if n, ok := props["application.name"].(string); ok {
+				info.nodeName = n
+			}
+		}
+
+		// State: pulse.corked = false → running, true → corked
+		if corked, ok := props["pulse.corked"].(bool); ok {
+			if !corked {
+				info.state = "running"
+			} else {
+				info.state = "corked"
+			}
+		} else {
+			info.state = "unknown"
+		}
+
+		result[nodeID] = info
+	}
+
+	// Also check the ALSA sink for audio format info
+	for _, obj := range objects {
+		if obj.Info == nil || obj.Info.Props == nil {
+			continue
+		}
+		props := obj.Info.Props
+		mediaClass, _ := props["media.class"].(string)
+		if mediaClass != "Audio/Sink" {
+			continue
+		}
+		// Found the audio sink — extract format if available
+		formatStr := ""
+		if f, ok := props["audio.format"].(string); ok && f != "" {
+			formatStr = f
+		}
+		if c, ok := props["audio.channels"].(float64); ok && c > 0 {
+			if formatStr != "" {
+				formatStr += fmt.Sprintf(" %.0fch", c)
+			} else {
+				formatStr = fmt.Sprintf("%.0fch", c)
+			}
+		}
+		if r, ok := props["audio.rate"].(float64); ok && r > 0 {
+			if formatStr != "" {
+				formatStr += fmt.Sprintf(" %.0fHz", r)
+			} else {
+				formatStr = fmt.Sprintf("%.0fHz", r)
+			}
+		}
+		// If we found sink format, apply to all stream nodes
+		if formatStr != "" {
+			for id := range result {
+				entry := result[id]
+				entry.sampleRate = formatStr
+				result[id] = entry
+			}
+		}
+		break
+	}
+
+	return result
+}
+
 func parseWpctlStatus() []StreamResponse {
 	out, err := runCmd(5*time.Second, "wpctl", "status")
 	if err != nil {
 		return nil
 	}
+
+	// One pw-dump call instead of N wpctl inspect calls
+	nodeInfo := getStreamNodeInfo()
 
 	hf := loadHosts()
 	var streams []StreamResponse
@@ -431,78 +543,20 @@ func parseWpctlStatus() []StreamResponse {
 			}
 		}
 
-		// Get node.name from wpctl inspect
-		nodeName := ""
-		state := "unknown"
-		sampleRate := ""
-		channels := ""
-		audioFormat := ""
-		inspOut, inspErr := runCmd(3*time.Second, "wpctl", "inspect", nodeID)
-		if inspErr == nil {
-			for _, vline := range strings.Split(inspOut, "\n") {
-				tv := strings.TrimSpace(vline)
-				if strings.Contains(tv, "node.name") && strings.Contains(tv, "=") {
-					eqParts := strings.SplitN(tv, "=", 2)
-					if len(eqParts) == 2 {
-						nodeName = strings.Trim(strings.TrimSpace(eqParts[1]), "\"")
-					}
-				}
-				if strings.Contains(tv, "state") && strings.Contains(tv, "=") && !strings.Contains(tv, "session") {
-					// Match node.state or just state property
-					eqParts := strings.SplitN(tv, "=", 2)
-					if len(eqParts) == 2 {
-						val := strings.TrimSpace(strings.Trim(eqParts[1], "\""))
-						if val != "" {
-							state = val
-						}
-					}
-				}
-				if strings.Contains(tv, "audio.rate") && strings.Contains(tv, "=") {
-					eqParts := strings.SplitN(tv, "=", 2)
-					if len(eqParts) == 2 {
-						sampleRate = strings.TrimSpace(eqParts[1])
-					}
-				}
-				if strings.Contains(tv, "audio.channels") && strings.Contains(tv, "=") && !strings.Contains(tv, "max") {
-					eqParts := strings.SplitN(tv, "=", 2)
-					if len(eqParts) == 2 {
-						channels = strings.TrimSpace(eqParts[1])
-					}
-				}
-				if strings.Contains(tv, "audio.format") && strings.Contains(tv, "=") {
-					eqParts := strings.SplitN(tv, "=", 2)
-					if len(eqParts) == 2 {
-						audioFormat = strings.Trim(strings.TrimSpace(eqParts[1]), "\"")
-					}
-				}
-			}
-		}
+		// Look up node info from pw-dump (fast, one call instead of N)
+		ni := nodeInfo[nodeID]
+		nodeName := ni.nodeName
+		state := ni.state
+		formatStr := ni.sampleRate  // holds combined format from ALSA sink
 		if nodeName == "" {
 			nodeName = name
 		}
-
-		// Build format string
-		formatStr := ""
-		if audioFormat != "" {
-			formatStr = audioFormat
-		}
-		if channels != "" {
-			if formatStr != "" {
-				formatStr += " " + channels + "ch"
-			} else {
-				formatStr = channels + "ch"
-			}
-		}
-		if sampleRate != "" {
-			if formatStr != "" {
-				formatStr += " " + sampleRate + "Hz"
-			} else {
-				formatStr = sampleRate + "Hz"
-			}
+		if state == "" {
+			state = "unknown"
 		}
 
 		// Compute health from node state
-		// PipeWire node states:
+		// PipeWire node states derived from pulse.corked:
 		//   running/active  = audio flowing normally     → good
 		//   idle/suspended  = connected but silent       → fair
 		//   corked/unknown  = disconnected or paused     → poor
