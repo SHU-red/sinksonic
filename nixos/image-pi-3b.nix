@@ -63,11 +63,6 @@
     options = [ "noatime" "nofail" ];
   };
 
-  # Swap file on /data — prevents OOM during nixos-rebuild (Go compilation)
-  swapDevices = [{
-    device = "/data/swap";
-  }];
-
   # Use /data for nix build temp space — prevents root partition from filling
   nix.extraOptions = ''
     min-free = 536870912
@@ -76,14 +71,14 @@
 
   # ── Boot services ────────────────────────────────────────────────────────
 
-  # Create swap file on /data (512MB) on first boot — prevents OOM during
-  # nixos-rebuild switch (Go web UI compilation needs ~500MB RAM)
+  # Swap — enabled by service after creation (no static swapDevices entry
+  # that can fail if the swap file doesn't exist yet on first boot).
   systemd.services."create-swap" = {
     description = "Create swap file on /data";
     after = [ "data.mount" ];
     requires = [ "data.mount" ];
-    before = [ "data-swap.swap" ];
-    wantedBy = [ "data-swap.swap" ];
+    before = [ "enable-swap.service" ];
+    wantedBy = [ "enable-swap.service" ];
     unitConfig.ConditionPathExists = "!/data/swap";
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
     script = ''
@@ -92,6 +87,15 @@
       mkswap /data/swap
       echo "Swap file created: 512MB"
     '';
+  };
+  systemd.services."enable-swap" = {
+    description = "Enable swap file on /data";
+    after = [ "data.mount" "create-swap.service" ];
+    requires = [ "data.mount" ];
+    wantedBy = [ "multi-user.target" ];
+    unitConfig.ConditionPathExists = "/data/swap";
+    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
+    script = "swapon /data/swap";
   };
 
   # Recreate /home on every boot (tmpfs wipes it)
