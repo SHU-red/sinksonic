@@ -56,14 +56,43 @@
   fileSystems."/root" = { device = "tmpfs"; fsType = "tmpfs"; options = [ "size=32M" "mode=0700" ]; };
   fileSystems."/etc"  = { device = "tmpfs"; fsType = "tmpfs"; options = [ "size=32M" "mode=0755" ]; };
 
-  # Persistent data partition (small ext4, only written on config changes)
+  # Persistent data partition — large enough for swap file + nix build space
   fileSystems."/data" = {
     device = "/dev/disk/by-label/SINKSONIC_DATA";
     fsType = "ext4";
     options = [ "noatime" "nofail" ];
   };
 
+  # Swap file on /data — prevents OOM during nixos-rebuild (Go compilation)
+  swapDevices = [{
+    device = "/data/swap";
+  }];
+
+  # Use /data for nix build temp space — prevents root partition from filling
+  nix.extraOptions = ''
+    min-free = 536870912
+    build-dir = /data/nix-build
+  '';
+
   # ── Boot services ────────────────────────────────────────────────────────
+
+  # Create swap file on /data (512MB) on first boot — prevents OOM during
+  # nixos-rebuild switch (Go web UI compilation needs ~500MB RAM)
+  systemd.services."create-swap" = {
+    description = "Create swap file on /data";
+    after = [ "data.mount" ];
+    requires = [ "data.mount" ];
+    before = [ "data-swap.swap" ];
+    wantedBy = [ "data-swap.swap" ];
+    unitConfig.ConditionPathExists = "!/data/swap";
+    serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
+    script = ''
+      dd if=/dev/zero of=/data/swap bs=1M count=512
+      chmod 600 /data/swap
+      mkswap /data/swap
+      echo "Swap file created: 512MB"
+    '';
+  };
 
   # Recreate /home on every boot (tmpfs wipes it)
   systemd.tmpfiles.rules = [
@@ -154,7 +183,7 @@ WEOF
         root_end=$(sfdisk -l "$img" 2>/dev/null | tail -1 | awk '{print $4}')
       fi
       [ -z "$root_end" ] && { echo "ERROR: no root partition end"; exit 1; }
-      data_sectors=$((64 * 1024 * 2))
+      data_sectors=$((512 * 1024 * 2))
       data_start=$(( ((root_end + 1 + 2047) / 2048) * 2048 ))
       truncate -s $(( (data_start + data_sectors + 1024) * 512 )) "$img"
       echo ",$data_sectors,83" | sfdisk -a "$img" --no-reread --no-tell-kernel 2>&1 || true
