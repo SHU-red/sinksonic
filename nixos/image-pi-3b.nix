@@ -34,6 +34,16 @@
     ];
   };
 
+  # Root filesystem — disable fsck on boot.
+  # The ext4 image is verified clean during build (e2fsck -f -y).
+  # Boot-time fsck fails on the Pi because resize/tempfs operations
+  # leave a journal state the initrd's fsck can't reconcile.
+  fileSystems."/" = {
+    device = "/dev/disk/by-label/NIXOS_SD";
+    fsType = "ext4";
+    noCheck = true;
+  };
+
   hardware.raspberry-pi.configtxt.settings.all.dtparam = [ "audio=on" ];
   hardware.enableRedistributableFirmware = true;
 

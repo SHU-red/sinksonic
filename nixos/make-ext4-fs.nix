@@ -92,6 +92,10 @@ pkgs.stdenv.mkDerivation {
 
     resize2fs $img $new_size
 
+    # Force-clean: the resize operations leave the fs dirty,
+    # and boot-time fsck on the Pi can't handle the journal state.
+    e2fsck -f -y $img
+
     if [ ${toString compressImage} ]; then
       echo "Compressing image"
       zstd -T$NIX_BUILD_CORES -v --no-progress ./$img -o $out
