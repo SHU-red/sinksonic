@@ -90,6 +90,7 @@
     before = [ "enable-swap.service" ];
     wantedBy = [ "enable-swap.service" ];
     unitConfig.ConditionPathExists = "!/data/swap";
+    path = [ pkgs.utillinux ];
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
     script = ''
       dd if=/dev/zero of=/data/swap bs=1M count=256
@@ -104,6 +105,7 @@
     requires = [ "data.mount" ];
     wantedBy = [ "multi-user.target" ];
     unitConfig.ConditionPathExists = "/data/swap";
+    path = [ pkgs.utillinux ];
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
     script = "swapon /data/swap";
   };
