@@ -88,7 +88,7 @@ pkgs.stdenv.mkDerivation {
     resize2fs -M $img
 
     new_size=$(dumpe2fs -h $img | awk -F: \
-      '/Block count/{count=$2} /Block size/{size=$2} END{print (count*size+16*2**20)/size}')
+      '/Block count/{count=$2} /Block size/{size=$2} END{print (count*size+4096*2**20)/size}')
 
     resize2fs $img $new_size
 
