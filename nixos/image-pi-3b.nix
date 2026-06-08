@@ -82,10 +82,10 @@
     unitConfig.ConditionPathExists = "!/data/swap";
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
     script = ''
-      dd if=/dev/zero of=/data/swap bs=1M count=512
+      dd if=/dev/zero of=/data/swap bs=1M count=256
       chmod 600 /data/swap
       mkswap /data/swap
-      echo "Swap file created: 512MB"
+      echo "Swap file created: 256MB"
     '';
   };
   systemd.services."enable-swap" = {
@@ -187,7 +187,7 @@ WEOF
         root_end=$(sfdisk -l "$img" 2>/dev/null | tail -1 | awk '{print $4}')
       fi
       [ -z "$root_end" ] && { echo "ERROR: no root partition end"; exit 1; }
-      data_sectors=$((512 * 1024 * 2))
+      data_sectors=$((1024 * 1024 * 2))
       data_start=$(( ((root_end + 1 + 2047) / 2048) * 2048 ))
       truncate -s $(( (data_start + data_sectors + 1024) * 512 )) "$img"
       echo ",$data_sectors,83" | sfdisk -a "$img" --no-reread --no-tell-kernel 2>&1 || true
