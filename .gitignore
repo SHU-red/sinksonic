@@ -1,19 +1,18 @@
-# Build artifacts
-result/
-result-dev/
-*.img
-*.xz
 
+# Build artifacts
+.DS_Store
+# Go (built in Docker, not locally)
 # IDE
 .idea/
-.vscode/
-*.swp
-*.swo
-
+*.img
 # OS
-.DS_Store
+result
+result/
+result-dev/
+*.swo
+*.swp
 Thumbs.db
-
-# Go (built in Docker, not locally)
+.vscode/
 webui/go.sum
 webui/sinksonic-webui
+*.xz
