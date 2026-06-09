@@ -34,7 +34,9 @@ done
 
 # ── OS detection ──────────────────────────────────────────────────────────────
 detect_os() {
-    if [ -f /etc/os-release ]; then
+    if [ -f /boot/dietpi/.version ] || [ -f /DietPi/system.txt ]; then
+        OS_ID="dietpi"
+    elif [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID="$ID"
         OS_LIKE="$ID_LIKE"
@@ -52,6 +54,16 @@ install_packages() {
     local pkgs_pipewire pkgs_docker
 
     case "$OS_ID" in
+        dietpi)
+            # DietPi is Debian-based, same packages
+            pkgs_pipewire="pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon qpwgraph"
+            pkgs_docker="docker.io docker-compose-v2"
+            CMD_UPDATE="apt-get update -qq"
+            CMD_INSTALL="apt-get install -y -qq"
+            # DietPi uses /mnt/dietpi_userdata/ for persistent data
+            DATA_DIR="${DATA_DIR:-/mnt/dietpi_userdata/sinksonic}"
+            DOCKER_COMPOSE_DIR="${DOCKER_COMPOSE_DIR:-$DATA_DIR}"
+            ;;
         debian|ubuntu|raspbian|linuxmint|pop)
             pkgs_pipewire="pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon qpwgraph"
             pkgs_docker="docker.io docker-compose-v2"
@@ -158,6 +170,19 @@ create_user() {
         fi
         # Enable linger so user services start at boot
         loginctl enable-linger "$SINKSONIC_USER" 2>/dev/null || true
+        # Enable PipeWire user services for the sinksonic user
+        local pw_user_services="pipewire pipewire-pulse wireplumber"
+        if [ -d "/home/$SINKSONIC_USER" ]; then
+            for svc in $pw_user_services; do
+                if [ -f "/usr/lib/systemd/user/$svc.service" ]; then
+                    # Use machinectl or sudo -u to enable
+                    sudo -u "$SINKSONIC_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $SINKSONIC_USER)" \
+                        systemctl --user enable "$svc" 2>/dev/null || true
+                fi
+            done
+            # Start user services now
+            loginctl activate "$SINKSONIC_USER" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -199,7 +224,24 @@ deploy_docker() {
 enable_readonly_root() {
     dry_run_hint "Enable read-only root filesystem (overlay)"
 
-    if [ "$OS_ID" = "raspbian" ] || [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
+    if [ "$OS_ID" = "dietpi" ]; then
+        # DietPi has a built-in overlay tool
+        if command -v dietpi-config &>/dev/null; then
+            if [ -z "$DRY_RUN" ]; then
+                # Enable overlayfs via dietpi's config system
+                /DietPi/dietpi/dietpi-overlay 1 2>/dev/null && \
+                    info "Read-only root enabled (DietPi overlay)" || \
+                    warn "DietPi overlay enable failed — enable manually: dietpi-config → Advanced → Overlay File System"
+            fi
+        elif [ -f /DietPi/dietpi/dietpi-overlay ]; then
+            dry_run_hint "/DietPi/dietpi/dietpi-overlay 1"
+            if [ -z "$DRY_RUN" ]; then
+                /DietPi/dietpi/dietpi-overlay 1 2>/dev/null && \
+                    info "Read-only root enabled (DietPi overlay)" || \
+                    warn "DietPi overlay enable failed"
+            fi
+        fi
+    elif [ "$OS_ID" = "raspbian" ] || [ "$OS_ID" = "debian" ] || [ "$OS_ID" = "ubuntu" ]; then
         if command -v raspi-config &>/dev/null; then
             if [ -z "$DRY_RUN" ]; then
                 # raspi-config overlay method
