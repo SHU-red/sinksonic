@@ -1,0 +1,35 @@
+# SinkSonic — DietPi first-boot configuration
+# Copy this file to the SD card boot partition BEFORE first boot:
+#   cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
+# (adjust mount point — could be /run/media/user/boot/, /mnt/boot/, etc.)
+#
+# On first boot, DietPi automatically:
+#   1. Sets hostname to "sinksonic"
+#   2. Installs Docker
+#   3. Runs the post-install script (scripts/dietpi/post-install.sh)
+#      which installs PipeWire, configures TCP, starts the container
+
+# ── System ─────────────────────────────────────────────────────────────────────
+AUTO_SETUP_HOSTNAME=sinksonic
+AUTO_SETUP_TIMEZONE=Europe/Berlin
+AUTO_SETUP_LOCALE=en_GB.UTF-8
+
+# ── Network ────────────────────────────────────────────────────────────────────
+# Use Ethernet by default. Edit this file to enable WiFi before boot.
+AUTO_SETUP_NET_WIFI_ENABLED=0
+# AUTO_SETUP_NET_WIFI_SSID=MyNetwork
+# AUTO_SETUP_NET_WIFI_KEY=MyPassword
+
+# ── Software to install ────────────────────────────────────────────────────────
+# Docker (ID 134) — needed to run the SinkSink container
+AUTO_SETUP_INSTALL_SOFTWARE_ID=134
+
+# ── Post-install script ───────────────────────────────────────────────────────
+# Downloads and runs the SinkSonic setup script after first-boot completes.
+# This installs PipeWire, configures TCP, and starts the container.
+AUTO_SETUP_CUSTOM_SCRIPT_EXEC=https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/post-install.sh
+
+# ── Read-only root (SD card longevity) ─────────────────────────────────────────
+# Enables DietPi's overlay filesystem after setup completes
+# Comment out if you need to modify the system later
+AUTO_SETUP_ENABLE_OVERLAYFS=1

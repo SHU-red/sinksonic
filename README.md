@@ -6,11 +6,33 @@ Works on **any Linux** — Raspberry Pi, x86, virtual machines. One Docker conta
 
 ## Quick start
 
+### Any Linux
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/setup.sh | sudo bash
 ```
 
-This installs PipeWire, Docker, configures the TCP audio receiver, and starts the SinkSonic web UI. After reboot, the system runs read-only to protect the SD card.
+### DietPi (zero-touch)
+
+Copy the pre-configured config to the SD card **before first boot**:
+
+```bash
+# With SD card in your desktop:
+cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
+
+# Or download it directly:
+curl -sSL -o /media/boot/dietpi.txt \
+  https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/dietpi.txt
+```
+
+Then insert the SD card into the device and power on. DietPi automatically:
+
+1. Sets hostname to `sinksonic`
+2. Installs Docker
+3. Runs the post-install script — installs PipeWire, configures TCP, starts the container
+4. Enables read-only overlayfs
+
+After 5–10 minutes, SinkSonic is running at `http://sinksonic.local:8080`.
 
 ### Or manually
 
