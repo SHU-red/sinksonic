@@ -17,19 +17,20 @@ curl -sSL https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/setup
 Copy two files to the SD card **before first boot**:
 
 ```bash
-# With SD card in your desktop:
-cp scripts/dietpi/dietpi.txt              /media/boot/dietpi.txt
-cp scripts/dietpi/post-install.sh         /media/boot/Automation_Custom_Script.sh
+cp scripts/dietpi/dietpi.txt                /media/boot/dietpi.txt
+cp scripts/dietpi/Automation_Custom_Script.sh /media/boot/Automation_Custom_Script.sh
 ```
 
-Then insert the SD card into the device and power on. DietPi automatically:
+Then insert the SD card, power on. DietPi automatically:
 
-1. Sets hostname to `sinksonic`
-2. Installs Docker
-3. Runs the post-install script — installs PipeWire, configures TCP, starts the container
-4. Enables read-only overlayfs
+1. Sets hostname to `SinkSonic`
+2. Installs Docker + PipeWire + Avahi
+3. Configures PipeWire TCP listener
+4. Starts SinkSonic container
+5. Enables read-only overlayfs
 
-After 5–10 minutes, SinkSonic is running at `http://sinksonic.local:8080`.
+After ~5 minutes the web UI is at `http://SinkSonic.local:8080`.
+SSH: `ssh dietpi@SinkSonic.local` (password: `dietpi`).
 
 ### Or manually
 
