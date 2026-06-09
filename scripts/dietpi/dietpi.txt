@@ -31,3 +31,11 @@ AUTO_SETUP_AUTOMATED=1
 # Enable built-in analog audio on Raspberry Pi (3.5mm jack)
 # For HDMI: vc4-hdmi | For USB: USB-Audio
 CONFIG_SOUNDCARD=snd_bcm2835
+
+# ── DietPi defaults (required to prevent first-boot errors) ────────────────────
+# APT mirror for updates (Raspberry Pi OS default)
+CONFIG_APT_RASPBIAN_MIRROR=http://raspbian.raspberrypi.com/raspbian
+# Ethernet auto-negotiation speed (0=automatic)
+AUTO_SETUP_NET_ETH_FORCE_SPEED=0
+# Enable IPv6
+CONFIG_ENABLE_IPV6=1
