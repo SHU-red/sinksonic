@@ -1,41 +1,22 @@
 # SinkSonic — DietPi automation settings
-# Copy this file and Automation_Custom_Script.sh to the SD card
-# boot partition BEFORE first boot:
+# Copy THIS ONE FILE to the SD card boot partition BEFORE first boot:
 #
-#   cp dietpi.txt               /media/boot/dietpi.txt
-#   cp Automation_Custom_Script.sh /media/boot/Automation_Custom_Script.sh
+#   cp dietpi.txt /media/boot/dietpi.txt
 #
-# DietPi reads dietpi.txt on first boot and applies everything
-# automatically. No SSH or manual steps required.
+# DietPi reads it on first boot, downloads the setup script from
+# GitHub (repo is public), pulls the Docker container from GHCR.
+# No other files needed.
 
-# ── SinkSonic-specific overrides ──────────────────────────────────────────────
-# Hostname the device advertises on the network
+# ── SinkSonic ──────────────────────────────────────────────────────────────────
 AUTO_SETUP_NET_HOSTNAME=SinkSonic
-
-# SSH server: -1=Dropbear | -2=OpenSSH
 AUTO_SETUP_SSH_SERVER_INDEX=-1
-
-# Install Docker (DietPi software ID 134)
 AUTO_SETUP_INSTALL_SOFTWARE_ID=134
-
-# Install PipeWire audio stack via APT
 AUTO_SETUP_APT_INSTALLS=pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon docker-compose-v2
-
-# Post-install script on boot partition (handles PipeWire config,
-# Docker data migration, SinkSonic container, overlayfs)
-AUTO_SETUP_CUSTOM_SCRIPT_EXEC=0
-
-# Fully automated — no prompts during first boot
+AUTO_SETUP_CUSTOM_SCRIPT_EXEC=https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/Automation_Custom_Script.sh
 AUTO_SETUP_AUTOMATED=1
 
-# Enable built-in analog audio on Raspberry Pi (3.5mm jack)
-# For HDMI: vc4-hdmi | For USB: USB-Audio
+# ── Hardware ───────────────────────────────────────────────────────────────────
 CONFIG_SOUNDCARD=snd_bcm2835
-
-# ── DietPi defaults (required to prevent first-boot errors) ────────────────────
-# APT mirror for updates (Raspberry Pi OS default)
 CONFIG_APT_RASPBIAN_MIRROR=http://raspbian.raspberrypi.com/raspbian
-# Ethernet auto-negotiation speed (0=automatic)
 AUTO_SETUP_NET_ETH_FORCE_SPEED=0
-# Enable IPv6
 CONFIG_ENABLE_IPV6=1
