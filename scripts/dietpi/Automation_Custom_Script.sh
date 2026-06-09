@@ -53,9 +53,21 @@ chown sinksonic:sinksonic /mnt/dietpi_userdata/sinksonic
 
 # ── 4. Start SinkSonic container ──────────────────────────────────────────────
 echo "[SinkSonic] Starting SinkSonic container..."
-curl -sSL -o /mnt/dietpi_userdata/sinksonic/docker-compose.yml \
-    https://raw.githubusercontent.com/SHU-red/sinksonic/main/docker-compose.yml
+mkdir -p /mnt/dietpi_userdata/sinksonic
 cd /mnt/dietpi_userdata/sinksonic
+
+# Load the pre-built image from boot partition (copied alongside the other files)
+if [ -f /boot/sinksonic-webui.tar.gz ]; then
+    docker load < /boot/sinksonic-webui.tar.gz
+elif [ -f /boot/sinksonic-webui.tar ]; then
+    docker load < /boot/sinksonic-webui.tar
+fi
+
+# Download compose file
+curl -sSL -o docker-compose.yml \
+    https://raw.githubusercontent.com/SHU-red/sinksonic/main/docker-compose.yml
+
+# Start the container
 docker compose up -d 2>&1 || echo "[SinkSonic] WARNING: docker compose failed"
 
 # ── 5. Enable read-only root (overlayfs) ──────────────────────────────────────

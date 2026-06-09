@@ -11,7 +11,7 @@
 services:
   sinksonic:
     build: .
-    image: sinksonic/sinksonic-webui:latest
+    image: ghcr.io/shu-red/sinksonic/sinksonic-webui:latest
     container_name: sinksonic
     restart: unless-stopped
 
