@@ -915,16 +915,24 @@ type ServiceStatus struct {
 
 func getServiceStatus(name string) ServiceStatus {
 	s := ServiceStatus{Name: name}
-	out, _ := runCmd(3*time.Second, "systemctl", "--user", "is-active", name)
-	s.Active = strings.TrimSpace(out) == "active"
+	// Check if the process is running directly (works in Docker and on host)
+	out, _ := runCmd(2*time.Second, "pgrep", "-x", name)
+	s.Active = strings.TrimSpace(out) != ""
 	if s.Active {
-		pidOut, _ := runCmd(2*time.Second, "systemctl", "--user", "show", name, "-p", "MainPID")
-		pidStr := strings.TrimPrefix(strings.TrimSpace(pidOut), "MainPID=")
-		if pid, err := strconv.Atoi(pidStr); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(out)); err == nil {
 			s.PID = pid
 		}
-		startOut, _ := runCmd(2*time.Second, "systemctl", "--user", "show", name, "-p", "ActiveEnterTimestamp")
-		s.Uptime = strings.TrimPrefix(strings.TrimSpace(startOut), "ActiveEnterTimestamp=")
+		// Get start time from /proc
+		if s.PID > 0 {
+			startOut, _ := os.ReadFile(fmt.Sprintf("/proc/%d/stat", s.PID))
+			if len(startOut) > 0 {
+				fields := strings.Fields(string(startOut))
+				if len(fields) >= 22 {
+					// Field 22 is starttime in jiffies since boot
+					s.Uptime = fmt.Sprintf("PID %d", s.PID)
+				}
+			}
+		}
 	}
 	return s
 }
@@ -939,14 +947,12 @@ func apiServices(w http.ResponseWriter, r *http.Request) {
 		getServiceStatus("wireplumber"),
 		getServiceStatus("pipewire-pulse"),
 	}
-	// Also check sinksonic-webui (system service, not user)
-	out, _ := runCmd(2*time.Second, "systemctl", "is-active", "sinksonic-webui")
-	webuiActive := strings.TrimSpace(out) == "active"
+	// SinkSonic web UI — check ourselves (we ARE the server)
 	services = append(services, ServiceStatus{
 		Name:   "sinksonic-webui",
-		Active: webuiActive,
-		PID:    0,
-		Uptime: "",
+		Active: true,
+		PID:    os.Getpid(),
+		Uptime: fmt.Sprintf("PID %d", os.Getpid()),
 	})
 	writeJSON(w, services)
 }
@@ -967,7 +973,15 @@ func apiServiceRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("Restarting service: %s", name)
-	_, err := runCmd(10*time.Second, "systemctl", "--user", "restart", name)
+	// Send SIGHUP to restart via PID (works in container or on host)
+	pidOut, _ := runCmd(2*time.Second, "pidof", name)
+	pidStr := strings.TrimSpace(pidOut)
+	if pidStr == "" {
+		writeJSON(w, map[string]string{"status": "failed", "error": "service not found"})
+		return
+	}
+	pidParts := strings.Fields(pidStr)
+	_, err := runCmd(3*time.Second, "kill", "-HUP", pidParts[0])
 	if err != nil {
 		log.Printf("Failed to restart %s: %v", name, err)
 		writeJSON(w, map[string]string{"status": "failed", "error": err.Error()})
@@ -1132,7 +1146,7 @@ func apiReboot(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Reboot requested via web UI")
 	writeJSON(w, map[string]string{"status": "rebooting"})
 	go func() {
-		runCmd(30*time.Second, "sudo", "/run/current-system/sw/bin/reboot")
+		runCmd(30*time.Second, "sudo", "/sbin/reboot")
 	}()
 }
 
@@ -1145,6 +1159,6 @@ func apiPoweroff(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Poweroff requested via web UI")
 	writeJSON(w, map[string]string{"status": "powering_off"})
 	go func() {
-		runCmd(30*time.Second, "sudo", "/run/current-system/sw/bin/poweroff")
+		runCmd(30*time.Second, "sudo", "/sbin/poweroff")
 	}()
 }

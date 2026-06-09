@@ -1,0 +1,58 @@
+# SinkSonic — Docker Compose
+#
+# Prerequisites:
+#   1. PipeWire + WirePlumber running on the HOST (not in container)
+#      The setup script (scripts/setup.sh) handles this.
+#   2. PulseAudio TCP module loaded (script handles this too)
+#
+# Usage:
+#   docker compose up -d
+
+services:
+  sinksonic:
+    build: .
+    image: sinksonic/sinksonic-webui:latest
+    container_name: sinksonic
+    restart: unless-stopped
+
+    # Read-only root — protects SD card from writes.
+    # Only /data (config volume) is writable.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16M
+
+    # Host networking: the web UI needs to reach PipeWire's TCP port (4713)
+    # and announce mDNS on the LAN.
+    network_mode: host
+
+    volumes:
+      # Persistent config (sinksonic.yaml, hosts.json) — ONLY writable mount
+      - sinksonic_data:/data
+
+      # PipeWire socket — allows the container's wpctl/pw-cli to communicate
+      # with the host's PipeWire daemon.
+      - /run/user/1000:/run/user/1000:ro
+
+      # systemd socket — allows reboot/poweroff via systemctl
+      - /run/systemd:/run/systemd:rw
+
+      # Machine ID — needed by some PipeWire/libpulse components
+      - /etc/machine-id:/etc/machine-id:ro
+
+    environment:
+      - XDG_RUNTIME_DIR=/run/user/1000
+      - CONFIG_PATH=/data/sinksonic.yaml
+      - LISTEN_ADDR=0.0.0.0
+      - LISTEN_PORT=8080
+
+    # Needed for reboot/poweroff via systemd and real-time PipeWire access
+    cap_add:
+      - SYS_BOOT
+      - SYS_NICE
+      - SYS_PTRACE
+
+    security_opt:
+      - seccomp=unconfined
+
+volumes:
+  sinksonic_data:
