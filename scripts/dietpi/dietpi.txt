@@ -1,7 +1,7 @@
 # SinkSonic — DietPi automation settings
 # Copy THIS ONE FILE to the SD card boot partition BEFORE first boot:
 #
-#   cp dietpi.txt /media/boot/dietpi.txt
+#   cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
 #
 # DietPi reads it on first boot, downloads the setup script from
 # GitHub (repo is public), pulls the Docker container from GHCR.
