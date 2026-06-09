@@ -3,11 +3,18 @@
 #   cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
 # (adjust mount point — could be /run/media/user/boot/, /mnt/boot/, etc.)
 #
-# On first boot, DietPi automatically:
-#   1. Sets hostname to "sinksonic"
-#   2. Installs Docker
-#   3. Runs the post-install script (scripts/dietpi/post-install.sh)
-#      which installs PipeWire, configures TCP, starts the container
+# Boot sequence:
+#   1. DietPi boots and runs first-boot setup
+#   2. Installs Docker (software ID 134)                    → real root
+#   3. Runs the post-install script                          → real root
+#      (installs PipeWire, configures TCP, moves Docker data
+#       to writable partition, starts SinkSonic container)
+#   4. Enables overlayfs (AUTO_SETUP_ENABLE_OVERLAYFS=1)     → freezes root
+#   5. Reboots into read-only mode
+#
+# After boot, only /mnt/dietpi_userdata/ is writable.
+# Docker stores layers there. SinkSonic config lives there.
+# Everything else is read-only — SD card has minimal writes.
 
 # ── System ─────────────────────────────────────────────────────────────────────
 AUTO_SETUP_HOSTNAME=sinksonic
