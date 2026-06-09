@@ -29,9 +29,10 @@ services:
       # Persistent config (sinksonic.yaml, hosts.json) — ONLY writable mount
       - sinksonic_data:/data
 
-      # PipeWire socket — allows the container's wpctl/pw-cli to communicate
-      # with the host's PipeWire daemon.
-      - /run/user/1000:/run/user/1000:ro
+      # PipeWire socket — default: UID 1001 (sinksonic user).
+      # On first boot, the setup script creates docker-compose.override.yml
+      # with the actual UID from the system.
+      - /run/user/1001:/run/user/1001:ro
 
       # systemd socket — allows reboot/poweroff via systemctl
       - /run/systemd:/run/systemd:rw
@@ -40,7 +41,7 @@ services:
       - /etc/machine-id:/etc/machine-id:ro
 
     environment:
-      - XDG_RUNTIME_DIR=/run/user/1000
+      - XDG_RUNTIME_DIR=/run/user/1001
       - CONFIG_PATH=/data/sinksonic.yaml
       - LISTEN_ADDR=0.0.0.0
       - LISTEN_PORT=8080
