@@ -14,15 +14,12 @@ curl -sSL https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/setup
 
 ### DietPi (zero-touch)
 
-Copy the pre-configured config to the SD card **before first boot**:
+Copy two files to the SD card **before first boot**:
 
 ```bash
 # With SD card in your desktop:
-cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
-
-# Or download it directly:
-curl -sSL -o /media/boot/dietpi.txt \
-  https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/dietpi.txt
+cp scripts/dietpi/dietpi.txt              /media/boot/dietpi.txt
+cp scripts/dietpi/post-install.sh         /media/boot/Automation_Custom_Script.sh
 ```
 
 Then insert the SD card into the device and power on. DietPi automatically:

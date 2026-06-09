@@ -85,7 +85,10 @@ AUTO_SETUP_APT_INSTALLS=pipewire pipewire-pulse wireplumber pulseaudio-utils ava
 # - Option 0 = Copy your script to /boot/Automation_Custom_Script.sh and it will be executed automatically.
 # - Option 1 = Host your script online, then use e.g. AUTO_SETUP_CUSTOM_SCRIPT_EXEC=https://myweb.com/myscript.sh and it will be downloaded and executed automatically.
 # - Executed script log: /var/lib/dietpi/logs/dietpi-automation_custom_script.log
-AUTO_SETUP_CUSTOM_SCRIPT_EXEC=https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/post-install.sh
+AUTO_SETUP_CUSTOM_SCRIPT_EXEC=0
+# Place post-install script alongside this file on the boot partition:
+#   cp scripts/dietpi/post-install.sh /media/boot/Automation_Custom_Script.sh
+# DietPi finds it at /boot/Automation_Custom_Script.sh and runs it.
 
 # Restore a DietPi-Backup on first boot: 0 => disable | 1 => interactive restore (show list of found backups) | 2 => non-interactive restore (restore first found backup)
 # - Simply attach the drive/disk/stick which contains the backup. All attached drives will be mounted temporarily and searched automatically.
