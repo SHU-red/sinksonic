@@ -4,19 +4,13 @@
 #   cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
 #
 # DietPi reads it on first boot, downloads the setup script from
-# GitHub (repo is public), pulls the Docker container from GHCR.
-# No other files needed.
+# GitHub (public repo), pulls the Docker container from GHCR.
+# No other files needed. First boot is fully automated.
 
-# ── SinkSonic ──────────────────────────────────────────────────────────────────
 AUTO_SETUP_NET_HOSTNAME=SinkSonic
 AUTO_SETUP_SSH_SERVER_INDEX=-1
 AUTO_SETUP_INSTALL_SOFTWARE_ID=134
-AUTO_SETUP_APT_INSTALLS=pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon docker-compose-v2
+AUTO_SETUP_APT_INSTALLS=pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon
 AUTO_SETUP_CUSTOM_SCRIPT_EXEC=https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/Automation_Custom_Script.sh
 AUTO_SETUP_AUTOMATED=1
-
-# ── Hardware ───────────────────────────────────────────────────────────────────
 CONFIG_SOUNDCARD=snd_bcm2835
-CONFIG_APT_RASPBIAN_MIRROR=http://raspbian.raspberrypi.com/raspbian
-AUTO_SETUP_NET_ETH_FORCE_SPEED=0
-CONFIG_ENABLE_IPV6=1
