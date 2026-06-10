@@ -337,7 +337,7 @@ func isPipeWireRunning() bool {
 	out, err := runCmd(3*time.Second, "pw-cli", "info", "all")
 	if err != nil {
 		// Fallback: check via pactl in case pw-cli isn't in PATH
-		_, err2 := runCmd(2*time.Second, "pactl", "info")
+		_, err2 := runCmd(2*time.Second, "pactl", "-s", os.Getenv("XDG_RUNTIME_DIR")+"/pulse/native", "info")
 		return err2 == nil
 	}
 	// pw-cli info all output: type: PipeWire:Interface:Core/4, name: "pipewire-0"
@@ -935,7 +935,13 @@ func getServiceStatus(name string) ServiceStatus {
 		}
 		return s
 	case "pipewire-pulse":
-		_, err := runCmd(2*time.Second, "pactl", "info")
+		// Connect directly to the pulse socket (bypasses UID check when
+		// container runs as root but socket is owned by user 1000/1001)
+		sockPath := os.Getenv("XDG_RUNTIME_DIR")
+		if sockPath == "" {
+			sockPath = "/run/user/1001"
+		}
+		_, err := runCmd(2*time.Second, "pactl", "-s", sockPath+"/pulse/native", "info")
 		s.Active = err == nil
 		if s.Active {
 			s.PID = 1
