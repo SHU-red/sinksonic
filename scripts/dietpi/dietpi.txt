@@ -1,16 +1,13 @@
-# SinkSonic — DietPi automation settings
-# Copy THIS ONE FILE to the SD card boot partition BEFORE first boot.
-# First boot is fully automated.
+# SinkSonic — DietPi automation
+# Copy BOTH files to the SD card boot partition:
+#   cp dietpi.txt /media/boot/dietpi.txt
+#   cp Automation_Custom_Script.sh /media/boot/Automation_Custom_Script.sh
+#
+# DietPi runs the script automatically after first-boot setup.
+# The script installs everything and survives reboots.
 
 AUTO_SETUP_NET_HOSTNAME=SinkSonic
 AUTO_SETUP_SSH_SERVER_INDEX=-1
-AUTO_SETUP_INSTALL_SOFTWARE_ID=134
-AUTO_SETUP_APT_INSTALLS=pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon
-AUTO_SETUP_CUSTOM_SCRIPT_EXEC=https://raw.githubusercontent.com/SHU-red/sinksonic/main/scripts/dietpi/Automation_Custom_Script.sh
 AUTO_SETUP_AUTOMATED=1
+AUTO_SETUP_CUSTOM_SCRIPT_EXEC=0
 CONFIG_SOUNDCARD=snd_bcm2835
-
-# DietPi pre-checks (prevent automated mode override)
-CONFIG_APT_DEBIAN_MIRROR=https://deb.debian.org/debian
-AUTO_SETUP_NET_ETH_FORCE_SPEED=disable
-CONFIG_ENABLE_IPV6=1
