@@ -19,14 +19,14 @@ cp scripts/dietpi/dietpi.txt /media/boot/dietpi.txt
 Insert SD card, power on. DietPi automatically:
 
 1. Sets hostname to `SinkSonic`
-2. Installs Docker + PipeWire + Avahi
-3. Downloads the setup script from GitHub (public repo)
-4. Pulls the SinkSonic container from GHCR
-5. Configures PipeWire TCP listener
-6. Enables read-only overlayfs
+2. Installs Docker + PipeWire + WirePlumber + Avahi
+3. Downloads the setup script from GitHub
+4. Starts PipeWire as system service
+5. Pulls SinkSonic container from GHCR and starts it
+6. Enables systemd services for reboot persistence
 
 After ~5 minutes:
-- **Web UI:** `http://SinkSonic.local:8080`
+- **Web UI:** `http://SinkSonic.local`
 - **SSH:** `ssh dietpi@SinkSonic.local` (password: `dietpi`)
 - **Audio:** `pactl load-module module-tunnel-sink server=tcp:SinkSonic.local:4713`
 
