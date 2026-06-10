@@ -1,6 +1,5 @@
 #!/bin/bash
 # SinkSonic — DietPi first-boot setup
-# Runs automatically via AUTO_SETUP_CUSTOM_SCRIPT_EXEC in dietpi.txt.
 set -euo pipefail
 
 LOG="/var/log/sinksonic-firstboot.log"
@@ -8,9 +7,9 @@ exec > "$LOG" 2>&1
 
 echo "[SinkSonic] Setup starting at $(date)"
 PIPEWIRE_USER="${PIPEWIRE_USER:-dietpi}"
-PIPEWIRE_UID=$(id -u "$PIPEWIRE_USER")
+PW_UID=$(id -u "$PIPEWIRE_USER")
 
-# ── 1. PipeWire TCP listener ──────────────────────────────────────────────────
+# ── 1. PipeWire TCP config ────────────────────────────────────────────────────
 echo "[SinkSonic] Configuring PipeWire TCP..."
 mkdir -p /etc/pipewire/pipewire-pulse.conf.d
 cat > /etc/pipewire/pipewire-pulse.conf.d/10-network-tcp.conf << 'CONF'
@@ -19,30 +18,39 @@ pulse.properties = { pulse.idle.timeout = 0 }
 stream.properties = { resample.quality = 14 }
 CONF
 
-# ── 2. Prepare user and start PipeWire ────────────────────────────────────────
-echo "[SinkSonic] Starting PipeWire as $PIPEWIRE_USER (UID $PIPEWIRE_UID)..."
+# ── 2. User setup ─────────────────────────────────────────────────────────────
+echo "[SinkSonic] Setting up user $PIPEWIRE_USER..."
 usermod -aG audio,video "$PIPEWIRE_USER" 2>/dev/null || true
 loginctl enable-linger "$PIPEWIRE_USER" 2>/dev/null || true
 
-# Create runtime directory and start PipeWire services
-mkdir -p "/run/user/$PIPEWIRE_UID"
-chown "$PIPEWIRE_USER:$PIPEWIRE_USER" "/run/user/$PIPEWIRE_UID"
-chmod 700 "/run/user/$PIPEWIRE_UID"
+# ── 3. Systemd service: PipeWire at boot ──────────────────────────────────────
+# Since PipeWire runs as a user service (needs login session), we create a
+# system-level oneshot that starts it early via runsv/sudo on boot.
+echo "[SinkSonic] Creating PipeWire boot service..."
+cat > /etc/systemd/system/sinksonic-pipewire.service << UNIT
+[Unit]
+Description=SinkSonic PipeWire audio server
+After=network.target sound.target
+Before=sinksonic-webui.service
 
-run_as_user() {
-    sudo -u "$PIPEWIRE_USER" XDG_RUNTIME_DIR="/run/user/$PIPEWIRE_UID" "$@"
-}
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/mkdir -p /run/user/$PW_UID
+ExecStartPre=/bin/chown $PIPEWIRE_USER:$PIPEWIRE_USER /run/user/$PW_UID
+ExecStartPre=/bin/chmod 700 /run/user/$PW_UID
+ExecStart=/bin/su $PIPEWIRE_USER -c "XDG_RUNTIME_DIR=/run/user/$PW_UID pipewire & wireplumber & pipewire-pulse &"
+ExecStop=/bin/pkill -u $PIPEWIRE_USER pipewire
+ExecStop=/bin/pkill -u $PIPEWIRE_USER wireplumber
+ExecStop=/bin/pkill -u $PIPEWIRE_USER pipewire-pulse
 
-run_as_user pipewire &>/dev/null &
-sleep 2
-run_as_user wireplumber &>/dev/null &
-sleep 2
-run_as_user pipewire-pulse &>/dev/null &
-sleep 2
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable sinksonic-pipewire.service
 
-echo "[SinkSonic] PipeWire sockets: $(ls /run/user/$PIPEWIRE_UID/pipewire-0 2>/dev/null || echo 'MISSING')"
-
-# ── 3. Move Docker to writable partition ──────────────────────────────────────
+# ── 4. Move Docker to writable partition ──────────────────────────────────────
 echo "[SinkSonic] Moving Docker data to /mnt/dietpi_userdata/docker..."
 mkdir -p /mnt/dietpi_userdata/docker /etc/docker
 cat > /etc/docker/daemon.json << 'CONF'
@@ -50,8 +58,8 @@ cat > /etc/docker/daemon.json << 'CONF'
 CONF
 systemctl restart docker 2>/dev/null || true
 
-# ── 4. Pull and start SinkSonic container ─────────────────────────────────────
-echo "[SinkSonic] Starting SinkSonic container..."
+# ── 5. Systemd service: SinkSonic container at boot ──────────────────────────
+echo "[SinkSonic] Creating SinkSonic boot service..."
 mkdir -p /mnt/dietpi_userdata/sinksonic
 cd /mnt/dietpi_userdata/sinksonic
 
@@ -59,31 +67,55 @@ cd /mnt/dietpi_userdata/sinksonic
 curl -sSL -o docker-compose.yml \
     https://raw.githubusercontent.com/SHU-red/sinksonic/main/docker-compose.yml
 
-# Create override with correct UID for this system
+# Create override with correct UID
 cat > docker-compose.override.yml << OVERRIDE
 services:
   sinksonic:
     environment:
-      - XDG_RUNTIME_DIR=/run/user/$PIPEWIRE_UID
+      - XDG_RUNTIME_DIR=/run/user/$PW_UID
     volumes:
       - sinksonic_data:/data
-      - /run/user/$PIPEWIRE_UID:/run/user/$PIPEWIRE_UID:ro
+      - /run/user/$PW_UID:/run/user/$PW_UID:ro
       - /run/systemd:/run/systemd:rw
 OVERRIDE
 
-# Pull and start
-docker compose pull 2>&1 || echo "[SinkSonic] WARNING: pull failed"
-docker compose up -d 2>&1 || echo "[SinkSonic] WARNING: start failed"
+# Create systemd service for Docker Compose
+cat > /etc/systemd/system/sinksonic-webui.service << UNIT
+[Unit]
+Description=SinkSonic Web UI
+After=docker.service sinksonic-pipewire.service
+Requires=docker.service
 
-# ── 5. Enable read-only overlayfs ─────────────────────────────────────────────
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/mnt/dietpi_userdata/sinksonic
+ExecStartPre=-/usr/bin/docker compose pull
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable sinksonic-webui.service
+
+# ── 6. Start services now ─────────────────────────────────────────────────────
+echo "[SinkSonic] Starting services..."
+systemctl start sinksonic-pipewire.service 2>&1
+sleep 3
+systemctl start sinksonic-webui.service 2>&1
+sleep 2
+
+echo "[SinkSonic] Services status:"
+systemctl is-active sinksonic-pipewire.service sinksonic-webui.service 2>&1
+
+# ── 7. Enable read-only overlayfs ─────────────────────────────────────────────
 echo "[SinkSonic] Enabling read-only overlayfs..."
 if [ -f /DietPi/dietpi/dietpi-overlay ]; then
-    /DietPi/dietpi/dietpi-overlay 1 2>/dev/null || true
-elif command -v dietpi-config &>/dev/null; then
-    echo "[SinkSonic] Enable overlay manually: dietpi-config → Advanced → Overlay"
-else
-    echo "[SinkSonic] Overlay not available — SD card writes not protected"
+    /DietPi/dietpi/dietpi-overlay 1 2>/dev/null && echo "[SinkSonic] Overlay enabled" || echo "[SinkSonic] Overlay failed"
 fi
 
 echo "[SinkSonic] Setup done at $(date)"
-echo "[SinkSonic] Web UI: http://SinkSonic.local:8080"
+echo "[SinkSonic] Web UI: http://SinkSonic.local"

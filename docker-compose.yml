@@ -44,7 +44,7 @@ services:
       - XDG_RUNTIME_DIR=/run/user/1001
       - CONFIG_PATH=/data/sinksonic.yaml
       - LISTEN_ADDR=0.0.0.0
-      - LISTEN_PORT=8080
+      - LISTEN_PORT=80
 
     # Needed for reboot/poweroff via systemd and real-time PipeWire access
     cap_add:
