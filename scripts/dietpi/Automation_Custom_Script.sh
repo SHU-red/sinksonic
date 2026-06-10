@@ -23,12 +23,28 @@ echo "[SinkSonic] Installing packages..."
 apt-get update -qq 2>&1 | tail -1
 apt-get install -y -qq docker.io docker-cli docker-compose pipewire pipewire-pulse wireplumber pulseaudio-utils avahi-daemon 2>&1 | tail -3
 
-# ── 3. PipeWire TCP config ────────────────────────────────────────────────────
-echo "[SinkSonic] Configuring PipeWire TCP..."
-mkdir -p /etc/pipewire/pipewire-pulse.conf.d
+# ── 3. PipeWire configs ──────────────────────────────────────────────────────
+echo "[SinkSonic] Configuring PipeWire..."
+mkdir -p /etc/pipewire/pipewire.conf.d /etc/pipewire/pipewire-pulse.conf.d
+
+# TCP listener for desktop streams
 cat > /etc/pipewire/pipewire-pulse.conf.d/10-network-tcp.conf << 'CONF'
 pulse.cmd = [{ cmd = "load-module" args = "module-native-protocol-tcp auth-anonymous=true" flags = [ nofail ] }]
 pulse.properties = { pulse.idle.timeout = 0 }
+stream.properties = { resample.quality = 14 }
+CONF
+
+# Audio quality settings (crystal clear, no stutter)
+cat > /etc/pipewire/pipewire.conf.d/99-sinksonic-quality.conf << 'CONF'
+context.properties = {
+    default.clock.rate = 48000
+    default.clock.allowed-rates = [ 44100 48000 96000 ]
+    default.clock.quantum = 2048
+    default.clock.min-quantum = 1024
+    default.clock.max-quantum = 8192
+}
+CONF
+cat > /etc/pipewire/pipewire-pulse.conf.d/99-sinksonic-quality.conf << 'CONF'
 stream.properties = { resample.quality = 14 }
 CONF
 

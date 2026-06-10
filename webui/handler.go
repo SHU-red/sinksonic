@@ -915,20 +915,46 @@ type ServiceStatus struct {
 
 func getServiceStatus(name string) ServiceStatus {
 	s := ServiceStatus{Name: name}
-	// Check if the process is running directly (works in Docker and on host)
+	// For PipeWire services, use CLI checks that traverse the Unix socket
+	// (works across container/host PID namespace boundary).
+	switch name {
+	case "pipewire":
+		_, err := runCmd(2*time.Second, "pw-cli", "info", "all")
+		s.Active = err == nil
+		if s.Active {
+			s.PID = 1
+			s.Uptime = "via pw-cli"
+		}
+		return s
+	case "wireplumber":
+		out, err := runCmd(2*time.Second, "wpctl", "status")
+		s.Active = err == nil && strings.Contains(out, "WirePlumber")
+		if s.Active {
+			s.PID = 1
+			s.Uptime = "via wpctl"
+		}
+		return s
+	case "pipewire-pulse":
+		_, err := runCmd(2*time.Second, "pactl", "info")
+		s.Active = err == nil
+		if s.Active {
+			s.PID = 1
+			s.Uptime = "via pactl"
+		}
+		return s
+	}
+	// Fallback: pgrep for non-PipeWire processes
 	out, _ := runCmd(2*time.Second, "pgrep", "-x", name)
 	s.Active = strings.TrimSpace(out) != ""
 	if s.Active {
 		if pid, err := strconv.Atoi(strings.TrimSpace(out)); err == nil {
 			s.PID = pid
 		}
-		// Get start time from /proc
 		if s.PID > 0 {
 			startOut, _ := os.ReadFile(fmt.Sprintf("/proc/%d/stat", s.PID))
 			if len(startOut) > 0 {
 				fields := strings.Fields(string(startOut))
 				if len(fields) >= 22 {
-					// Field 22 is starttime in jiffies since boot
 					s.Uptime = fmt.Sprintf("PID %d", s.PID)
 				}
 			}
