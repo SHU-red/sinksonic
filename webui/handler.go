@@ -301,21 +301,28 @@ type StatusResponse struct {
 }
 
 type StreamResponse struct {
-	Index     int    `json:"index"`
-	Name      string `json:"name"`
-	NodeName  string `json:"node_name"`
-	NodeID    string `json:"node_id"`
-	Volume    int    `json:"volume"`
-	Muted     bool   `json:"muted"`
-	Connected bool   `json:"connected"`
-	HostID    string `json:"host_id"`
-	HostLabel string `json:"host_label"`
-	Known     bool   `json:"known"`
-	State     string `json:"state"`      // "active", "idle", "corked"
-	Format    string `json:"format"`     // e.g. "s16le 2ch 48000Hz"
-	Health    string `json:"health"`     // "good", "fair", "poor"
-	AppName   string `json:"app_name"`   // application.name (e.g. "Firefox")
-	HostName  string `json:"host_name"`  // host identity (e.g. "shured@fedora")
+	Index       int     `json:"index"`
+	Name        string  `json:"name"`
+	NodeName    string  `json:"node_name"`
+	NodeID      string  `json:"node_id"`
+	Volume      int     `json:"volume"`
+	Muted       bool    `json:"muted"`
+	Connected   bool    `json:"connected"`
+	HostID      string  `json:"host_id"`
+	HostLabel   string  `json:"host_label"`
+	Known       bool    `json:"known"`
+	State       string  `json:"state"`       // "active", "idle", "corked"
+	Format      string  `json:"format"`      // e.g. "s16le 2ch 48000Hz"
+	Health      string  `json:"health"`      // "good", "fair", "poor"
+	AppName     string  `json:"app_name"`    // application.name (e.g. "Firefox")
+	HostName    string  `json:"host_name"`   // host identity (e.g. "shured@fedora")
+	SampleRate  int     `json:"sample_rate"` // Hz
+	Channels    int     `json:"channels"`
+	AudioFormat string  `json:"audio_format"` // e.g. "S16LE", "F32"
+	BitDepth    int     `json:"bit_depth"`    // bits per sample
+	LatencyMs   float64 `json:"latency_ms"`
+	BitrateKbps int     `json:"bitrate_kbps"`
+	ResampleQ   int     `json:"resample_quality"`
 }
 
 type VolumeRequest struct {
@@ -512,11 +519,19 @@ func isPipeWireRunning() bool {
 // getStreamNodeInfo calls pw-dump once and returns a map of nodeID -> node info
 // This replaces N individual wpctl inspect calls with one fast JSON call.
 type streamNodeInfo struct {
-	nodeName   string
-	state      string
-	sinkFormat  string // combined format from ALSA sink, e.g. "S16LE 2ch 48000Hz"
-	appName    string // application.name (e.g. "Firefox")
-	hostName   string // host identifier (e.g. "shured@fedora")
+	nodeName     string
+	state        string
+	sinkFormat   string // combined format from ALSA sink, e.g. "S16LE 2ch 48000Hz"
+	appName      string // application.name (e.g. "Firefox")
+	hostName     string // host identifier (e.g. "shured@fedora")
+	sampleRate   int    // Hz
+	channels     int
+	audioFormat  string // e.g. "S16LE", "F32"
+	bitDepth     int    // bits per sample
+	latencyMs    float64
+	bufferFrames int
+	bitrateKbps  int
+	resampleQ    int
 }
 
 func getStreamNodeInfo() map[string]streamNodeInfo {
@@ -529,7 +544,8 @@ func getStreamNodeInfo() map[string]streamNodeInfo {
 		ID   int    `json:"id"`
 		Type string `json:"type"`
 		Info *struct {
-			Props map[string]interface{} `json:"props"`
+			Props  map[string]interface{}            `json:"props"`
+			Params map[string]interface{}            `json:"params"`
 		} `json:"info"`
 	}
 	if err := json.Unmarshal([]byte(dump), &objects); err != nil {
@@ -587,6 +603,93 @@ func getStreamNodeInfo() map[string]streamNodeInfo {
 				// Fallback: use a shortened node name as host identity
 				info.hostName = info.nodeName
 			}
+		}
+
+		// --- Quality metrics ---
+		// Extract audio format from params.Format (negotiated format)
+		if obj.Info.Params != nil {
+			if formatList, ok := obj.Info.Params["Format"].([]interface{}); ok && len(formatList) > 0 {
+				if fmtMap, ok := formatList[0].(map[string]interface{}); ok {
+					if f, ok := fmtMap["format"].(string); ok {
+						info.audioFormat = f
+					}
+					if r, ok := fmtMap["rate"].(float64); ok {
+						info.sampleRate = int(r)
+					}
+					if c, ok := fmtMap["channels"].(float64); ok {
+						info.channels = int(c)
+					}
+				}
+			}
+			// Fallback: try EnumFormat (same structure)
+			if info.sampleRate == 0 {
+				if efList, ok := obj.Info.Params["EnumFormat"].([]interface{}); ok && len(efList) > 0 {
+					if efMap, ok := efList[0].(map[string]interface{}); ok {
+						if r, ok := efMap["rate"].(float64); ok {
+							info.sampleRate = int(r)
+						}
+						if c, ok := efMap["channels"].(float64); ok {
+							info.channels = int(c)
+						}
+					}
+				}
+			}
+		}
+
+		// Also check props for format info
+		if info.sampleRate == 0 || info.channels == 0 {
+			if nr, ok := props["node.rate"].(string); ok {
+				parts := strings.Split(nr, "/")
+				if len(parts) == 2 {
+					info.sampleRate = parseInt(parts[1], 0)
+				}
+			}
+			if c, ok := props["audio.channels"].(float64); ok && info.channels == 0 {
+				info.channels = int(c)
+			}
+		}
+
+		// Bit depth from format string: S16LE=16, S24=24, S32=32, F32=32, F64=64
+		if info.audioFormat != "" {
+			f := strings.ToUpper(info.audioFormat)
+			if strings.Contains(f, "F64") {
+				info.bitDepth = 64
+			} else if strings.Contains(f, "F32") || strings.Contains(f, "FLOAT") {
+				info.bitDepth = 32
+			} else if strings.Contains(f, "S32") || strings.Contains(f, "U32") {
+				info.bitDepth = 32
+			} else if strings.Contains(f, "S24") || strings.Contains(f, "U24") {
+				info.bitDepth = 24
+			} else if strings.Contains(f, "S16") || strings.Contains(f, "U16") {
+				info.bitDepth = 16
+			} else if strings.Contains(f, "S8") || strings.Contains(f, "U8") {
+				info.bitDepth = 8
+			}
+		}
+		if info.bitDepth == 0 {
+			info.bitDepth = 16 // safe default
+		}
+
+		// Calculate bitrate: sampleRate * bitDepth * channels
+		if info.sampleRate > 0 && info.bitDepth > 0 && info.channels > 0 {
+			info.bitrateKbps = info.sampleRate * info.bitDepth * info.channels / 1000
+		}
+
+		// Latency from node.latency prop ("1200/48000" = 25ms)
+		if latStr, ok := props["node.latency"].(string); ok {
+			parts := strings.Split(latStr, "/")
+			if len(parts) == 2 {
+				frames := parseFloat(parts[0], 0)
+				rate := parseFloat(parts[1], 48000)
+				if rate > 0 {
+					info.latencyMs = frames / rate * 1000
+				}
+			}
+		}
+
+		// Resample quality from props
+		if rq, ok := props["resample.quality"].(float64); ok {
+			info.resampleQ = int(rq)
 		}
 
 		// State: pulse.corked = false → running, true → corked
@@ -797,21 +900,28 @@ func parseWpctlStatus() []StreamResponse {
 		}
 
 		streams = append(streams, StreamResponse{
-			Index:     idx,
-			Name:      displayName,
-			NodeName:  nodeName,
-			NodeID:    nodeID,
-			Volume:    volume,
-			Muted:     muted,
-			Connected: true,
-			HostID:    hostID,
-			HostLabel: hostLabel,
-			Known:     known,
-			State:     friendlyState,
-			Format:    formatStr,
-			Health:    health,
-			AppName:   appName,
-			HostName:  hostName,
+			Index:       idx,
+			Name:        displayName,
+			NodeName:    nodeName,
+			NodeID:      nodeID,
+			Volume:      volume,
+			Muted:       muted,
+			Connected:   true,
+			HostID:      hostID,
+			HostLabel:   hostLabel,
+			Known:       known,
+			State:       friendlyState,
+			Format:      formatStr,
+			Health:      health,
+			AppName:     appName,
+			HostName:    hostName,
+			SampleRate:  ni.sampleRate,
+			Channels:    ni.channels,
+			AudioFormat: ni.audioFormat,
+			BitDepth:    ni.bitDepth,
+			LatencyMs:   ni.latencyMs,
+			BitrateKbps: ni.bitrateKbps,
+			ResampleQ:   ni.resampleQ,
 		})
 		idx++
 	}

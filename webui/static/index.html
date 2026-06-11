@@ -630,9 +630,19 @@
             ? 'Audio flowing normally'
             : (s.health === 'fair' ? 'Connected but idle' : 'Unstable or disconnected');
           const streamName = s.app_name && s.app_name !== 'PipeWire' ? s.app_name : s.name;
+          // Build quality string
+          let qualityParts = [];
+          if (s.sample_rate) qualityParts.push(s.sample_rate + 'Hz');
+          if (s.audio_format) qualityParts.push(s.audio_format);
+          if (s.bit_depth) qualityParts.push(s.bit_depth + 'bit');
+          if (s.channels) qualityParts.push(s.channels + 'ch');
+          if (s.bitrate_kbps) qualityParts.push(s.bitrate_kbps + 'kbps');
+          if (s.latency_ms) qualityParts.push(Math.round(s.latency_ms) + 'ms');
+          if (s.resample_quality !== undefined) qualityParts.push('RQ' + s.resample_quality);
+          const qualityStr = qualityParts.length > 0 ? qualityParts.join(' / ') : '';
           return `<div class="stream-item" style="margin-bottom:0.25rem;padding:0.5rem 0.75rem">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <div style="flex:1">
+              <div style="flex:1;min-width:0">
                 <span style="font-size:0.8rem;font-weight:500">${escapeHtml(streamName)}</span>
                 <span style="font-size:0.65rem;color:var(--text2);margin-left:0.5rem">${escapeHtml(s.format || '')}</span>
               </div>
@@ -648,6 +658,10 @@
                 <span class="health-badge ${healthClass}" style="font-size:0.65rem" title="${healthTip}">${healthLabel}</span>
               </div>
             </div>
+            ${qualityStr ? '<div style="margin-top:0.3rem;font-size:0.6rem;color:var(--text2);font-family:var(--mono);display:flex;gap:0.75rem"><span>' + qualityParts.map((q, i) => {
+              const colors = ['#6c5ce7','#00b894','#a29bfe','#fdcb6e','#e17055','#00cec9','#fd79a8'];
+              return '<span style="color:' + colors[i % colors.length] + '">' + escapeHtml(q) + '</span>';
+            }).join(' <span style="color:var(--border)">|</span> ') + '</span></div>' : ''}
           </div>`;
         }).join('');
         return `<div style="margin-bottom:0.5rem">
