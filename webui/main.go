@@ -53,6 +53,8 @@ func main() {
 	mux.HandleFunc("/api/setup/linux/script", apiLinuxSetupScript)
 	mux.HandleFunc("/api/sinks", apiSinks)
 	mux.HandleFunc("/api/sink/default", apiDefaultSink)
+	mux.HandleFunc("/api/volume", apiSetMasterVolume)
+	mux.HandleFunc("/api/levels", apiLevels)
 
 	server := &http.Server{
 		Addr:         listenAddr,

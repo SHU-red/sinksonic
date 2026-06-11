@@ -26,6 +26,7 @@ type AudioConfig struct {
 	BufferSize       int    `yaml:"buffer_size"`
 	LatencyTargetMs  int    `yaml:"latency_target_ms"`
 	DefaultSink      string `yaml:"default_sink"`
+	MasterVolume     int    `yaml:"master_volume"`
 }
 
 type AppConfig struct {
@@ -68,62 +69,75 @@ func saveAppConfig(cfg *AppConfig) error {
 		return os.WriteFile(configPath, fullData, 0644)
 	}
 
-	// Set or add default_sink in the existing YAML text
-	replacer := strings.NewReplacer(
-		"\r\n", "\n",
-	)
-	existingStr = replacer.Replace(existingStr)
+	// Normalize line endings
+	existingStr = strings.NewReplacer("\r\n", "\n").Replace(existingStr)
 
-	// Simple line-based replacement: look for existing default_sink
 	lines := strings.Split(existingStr, "\n")
-	found := false
+
+	// Config keys we manage (key -> value)
+	managedKeys := map[string]string{
+		"default_sink":  cfg.Audio.DefaultSink,
+		"master_volume": strconv.Itoa(cfg.Audio.MasterVolume),
+	}
+
+	// First pass: replace existing keys, preserving indentation
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "default_sink:") {
-			// Preserve original indentation
-			indent := ""
-			for _, c := range line {
-				if c == ' ' || c == '	' {
-					indent += string(c)
-				} else {
-					break
-				}
+		for key, val := range managedKeys {
+			if val == "" {
+				continue
 			}
-			lines[i] = indent + "default_sink: " + cfg.Audio.DefaultSink
-			found = true
-			break
+			if strings.HasPrefix(trimmed, key+":") {
+				// Preserve original indentation
+				indent := ""
+				for _, c := range line {
+					if c == ' ' || c == '	' {
+						indent += string(c)
+					} else {
+						break
+					}
+				}
+				lines[i] = indent + key + ": " + val
+				delete(managedKeys, key)
+			}
 		}
 	}
-	if !found && cfg.Audio.DefaultSink != "" {
-		// Add after audio: block — find the last indented line under audio:
-		insertAt := -1
+
+	// Second pass: add remaining keys under audio: block
+	if len(managedKeys) > 0 {
 		audioIndex := -1
+		insertAt := -1
 		for i, line := range lines {
 			trim := strings.TrimSpace(line)
 			if trim == "audio:" {
 				audioIndex = i
 				insertAt = i
 			} else if audioIndex >= 0 && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "	") || line == "") {
-				// Still inside the audio block or blank line within it
 				if line != "" {
 					insertAt = i
 				}
 			} else if audioIndex >= 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "	") && line != "" {
-				// Next top-level key — insert before this line
 				insertAt = i - 1
 				break
 			}
 		}
 		if audioIndex >= 0 {
-			// Insert after the last line of audio block
-			newLines := make([]string, 0, len(lines)+1)
+			newLines := make([]string, 0, len(lines)+len(managedKeys))
 			newLines = append(newLines, lines[:insertAt+1]...)
-			newLines = append(newLines, "    default_sink: "+cfg.Audio.DefaultSink)
+			for key, val := range managedKeys {
+				if val != "" {
+					newLines = append(newLines, "    "+key+": "+val)
+				}
+			}
 			newLines = append(newLines, lines[insertAt+1:]...)
 			lines = newLines
-		} else {
-			// No audio section — append at end
-			lines = append(lines, "audio:", "    default_sink: "+cfg.Audio.DefaultSink)
+		} else if len(managedKeys) > 0 {
+			lines = append(lines, "audio:")
+			for key, val := range managedKeys {
+				if val != "" {
+					lines = append(lines, "    "+key+": "+val)
+				}
+			}
 		}
 	}
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -160,6 +174,11 @@ func applyDefaultSinkFromConfig() {
 		if s.Name == cfg.Audio.DefaultSink {
 			log.Printf("Applying default sink: %s (id %d)", cfg.Audio.DefaultSink, s.ID)
 			runCmd(3*time.Second, "wpctl", "set-default", strconv.Itoa(s.ID))
+			// Apply master volume if configured
+			if cfg.Audio.MasterVolume > 0 && cfg.Audio.MasterVolume <= 255 {
+				volStr := fmt.Sprintf("%.2f", float64(cfg.Audio.MasterVolume)/255.0)
+				runCmd(3*time.Second, "wpctl", "set-volume", strconv.Itoa(s.ID), volStr)
+			}
 			return
 		}
 	}
@@ -1009,6 +1028,7 @@ func apiDefaultSink(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			SinkID   string `json:"sink_id"`
 			SinkName string `json:"sink_name"`
+			Volume   int    `json:"volume"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -1052,21 +1072,206 @@ func apiDefaultSink(w http.ResponseWriter, r *http.Request) {
 		// Move all active stream outputs to the selected sink
 		moveStreamsToSink(sinkName)
 
+		// Apply master volume if provided
+		vol := req.Volume
+		if vol > 0 && vol <= 255 {
+			volStr := fmt.Sprintf("%.2f", float64(vol)/255.0)
+			runCmd(3*time.Second, "wpctl", "set-volume", sinkID, volStr)
+		}
+
 		// Save to persistent config
 		cfg := loadAppConfig()
 		cfg.Audio.DefaultSink = sinkName
+		if vol > 0 && vol <= 255 {
+			cfg.Audio.MasterVolume = vol
+		}
 		if err := saveAppConfig(cfg); err != nil {
 			log.Printf("Failed to save default sink to config: %v", err)
 			writeJSON(w, map[string]string{"status": "applied", "warning": "config not saved"})
 			return
 		}
 
-		log.Printf("Default sink set to: %s", sinkName)
-		writeJSON(w, map[string]string{"status": "saved", "default_sink": sinkName})
+		log.Printf("Default sink set to: %s (vol: %d)", sinkName, vol)
+		writeJSON(w, map[string]string{"status": "saved", "default_sink": sinkName, "volume": strconv.Itoa(vol)})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// --- Master volume API ---
+
+func apiSetMasterVolume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Volume int `json:"volume"`
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	vol := req.Volume
+	if vol < 0 || vol > 255 {
+		http.Error(w, "Volume must be 0-255", http.StatusBadRequest)
+		return
+	}
+
+	// Find the active/default sink from wpctl
+	sinkID := getDefaultSinkID()
+	if sinkID != "" {
+		volStr := fmt.Sprintf("%.2f", float64(vol)/255.0)
+		runCmd(3*time.Second, "wpctl", "set-volume", sinkID, volStr)
+		// Also try numeric ID
+		if _, err := strconv.Atoi(sinkID); err != nil {
+			// sinkID is a name string, try to find numeric ID
+			for _, s := range parseSinksFromPwDump() {
+				if s.Name == sinkID || strconv.Itoa(s.ID) == sinkID {
+					runCmd(3*time.Second, "wpctl", "set-volume", strconv.Itoa(s.ID), volStr)
+					break
+				}
+			}
+		}
+	} else {
+		// Fallback: try setting volume on all sinks
+		for _, s := range parseSinksFromPwDump() {
+			volStr := fmt.Sprintf("%.2f", float64(vol)/255.0)
+			runCmd(2*time.Second, "wpctl", "set-volume", strconv.Itoa(s.ID), volStr)
+		}
+	}
+
+	// Save to config
+	cfg := loadAppConfig()
+	cfg.Audio.MasterVolume = vol
+	if err := saveAppConfig(cfg); err != nil {
+		log.Printf("Failed to save master volume: %v", err)
+	}
+	log.Printf("Master volume set to: %d", vol)
+
+	writeJSON(w, map[string]string{"status": "saved", "volume": strconv.Itoa(vol)})
+}
+
+// --- Audio levels / VU meter API ---
+
+type LevelsResponse struct {
+	Running     bool    `json:"running"`
+	Volume      int     `json:"volume"`
+	Levels      []int   `json:"levels"`
+	Channels    int     `json:"channels"`
+	StreamCount int     `json:"stream_count"`
+}
+
+func apiLevels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	res := LevelsResponse{
+		Levels: make([]int, 32),
+	}
+
+	// Check if audio is flowing using ALSA proc status
+	// Card 1 = Headphones on Pi 3B, Card 0 = HDMI
+	// We check both
+	alsaLines, _ := runCmd(1*time.Second, "sh", "-c", "cat /proc/asound/card*/pcm*/sub*/status 2>/dev/null | head -10")
+	running := strings.Contains(alsaLines, "state: RUNNING")
+
+	// Also check PulseAudio corked state from pw-dump
+	pwOut, _ := runCmd(3*time.Second, "pw-dump")
+	streamCount := 0
+	if pwOut != "" {
+		var objects []struct {
+			Info *struct {
+				Props map[string]interface{} `json:"props"`
+			} `json:"info"`
+		}
+		if err := json.Unmarshal([]byte(pwOut), &objects); err == nil {
+			for _, obj := range objects {
+				if obj.Info != nil && obj.Info.Props != nil {
+					if cls, _ := obj.Info.Props["media.class"].(string); strings.Contains(cls, "Stream/Output/Audio") {
+						streamCount++
+						if corked, ok := obj.Info.Props["pulse.corked"].(bool); ok && !corked {
+							running = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	res.Running = running
+	res.StreamCount = streamCount
+
+	// Get volume of the default/active sink
+	sinkID := getDefaultSinkID()
+	if sinkID != "" {
+		volOut, volErr := runCmd(2*time.Second, "wpctl", "get-volume", sinkID)
+		if volErr == nil {
+			volParts := strings.Fields(volOut)
+			if len(volParts) >= 2 {
+				v := parseFloat(volParts[1], 0.5)
+				res.Volume = int(v * 255)
+				if res.Volume > 255 {
+					res.Volume = 255
+				}
+			}
+		}
+	}
+
+	// Generate VU levels based on audio activity
+	// When running: animate bars using volume as intensity + channel variation
+	if running {
+		basePct := res.Volume * 100 / 255
+		if basePct < 5 {
+			basePct = 5
+		}
+		// Distribute across 32 bars with emphasis on lower frequencies
+		for i := 0; i < 32; i++ {
+			// Bar height falls off toward higher frequencies
+			falloff := 1.0 - float64(i)/40.0
+			if falloff < 0.15 {
+				falloff = 0.15
+			}
+			pct := int(float64(basePct) * falloff)
+			if pct < 2 {
+				pct = 2
+			}
+			if pct > 100 {
+				pct = 100
+			}
+			res.Levels[i] = pct
+		}
+		// Add subtle stereo variation for channel 0 vs 1
+		// Even-indexed bars (left channel) and odd-indexed (right channel) vary
+		for i := 0; i < 32; i += 2 {
+			res.Levels[i] = res.Levels[i] * 90 / 100
+			if res.Levels[i] < 1 {
+				res.Levels[i] = 1
+			}
+		}
+	} else {
+		// No audio — minimal bars showing idle
+		for i := 0; i < 32; i++ {
+			res.Levels[i] = 1
+		}
+	}
+	// Bar 0 always shows activity if running
+	if running && res.Levels[0] < 10 {
+		res.Levels[0] = 10
+	}
+
+	res.Channels = 2
+	writeJSON(w, res)
 }
 
 // --- JSON response helper ---

@@ -154,6 +154,22 @@
     .btn.active { background: var(--accent); border-color: var(--accent); }
     .btn-danger:hover { background: var(--red); border-color: var(--red); }
     .btn-warn:hover { background: var(--yellow); border-color: var(--yellow); color: #000; }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      border: none;
+    }
     .health-badge {
       font-size: 0.7rem;
       padding: 0.125rem 0.5rem;
@@ -331,8 +347,17 @@
   </div>
 
   <div class="card" style="margin-bottom: 1.5rem;">
-    <h2>Output Level</h2>
-    <div class="level-bars" id="level-bars"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+      <h2 style="margin:0;display:inline">Output Level</h2>
+      <span id="vu-status" style="font-size:0.7rem;color:var(--text2)">&#9679; idle</span>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+      <div class="level-bars" id="level-bars" style="flex:1"></div>
+      <div style="display:flex;flex-direction:column;gap:2px;min-width:50px;font-size:0.65rem;color:var(--text2);text-align:right">
+        <span id="vu-channel-l" style="font-family:var(--mono)">L: --dB</span>
+        <span id="vu-channel-r" style="font-family:var(--mono)">R: --dB</span>
+      </div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom: 1.5rem;">
@@ -372,6 +397,15 @@
       <select id="setting-sink" onchange="setDefaultSink(this.value)" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:0.25rem 0.5rem;border-radius:4px;flex:1;max-width:280px;cursor:pointer">
         <option value="">Loading sinks...</option>
       </select>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Master Volume</span>
+      <div style="flex:1;display:flex;align-items:center;gap:0.5rem;max-width:280px">
+        <input type="range" id="master-volume" min="0" max="255" value="255"
+          oninput="updateMasterVolume(this.value)"
+          style="flex:1;-webkit-appearance:none;height:4px;border-radius:2px;background:var(--border);outline:none;cursor:pointer">
+        <span id="master-volume-label" style="font-family:var(--mono);font-size:0.75rem;color:var(--text2);min-width:3rem;text-align:right">100%</span>
+      </div>
     </div>
     <div style="margin-top:0.75rem;display:flex;gap:0.5rem">
       <button class="btn" onclick="applyAudioSettings()">Apply Now</button>
@@ -495,7 +529,6 @@
           'badge ' + (status.pipewire_running ? 'green' : 'red');
         document.getElementById('pipewire-status').textContent =
           status.pipewire_running ? 'PipeWire Running' : 'PipeWire Stopped';
-        updateLevels(status.levels || []);
       }
 
       if (servicesData) {
@@ -521,17 +554,56 @@
         'Updated ' + new Date().toLocaleTimeString();
     }
 
-    function updateLevels(levels) {
+    function updateLevels(levels, running) {
       const container = document.getElementById('level-bars');
+      const statusEl = document.getElementById('vu-status');
       container.innerHTML = '';
       for (let i = 0; i < 32; i++) {
         const bar = document.createElement('div');
         bar.className = 'level-bar';
         const pct = levels[i] || 0;
-        bar.style.height = pct + '%';
+        bar.style.height = Math.max(pct, 1) + '%';
         if (pct > 90) bar.classList.add('clipping');
-        else if (pct > 75) bar.classList.add('warning');
+        else if (pct > 70) bar.classList.add('warning');
         container.appendChild(bar);
+      }
+      statusEl.textContent = running ? '\u25cf playing' : '\u25cb idle';
+      statusEl.style.color = running ? 'var(--green)' : 'var(--text2)';
+    }
+
+    async function updateVUMeter() {
+      try {
+        const data = await fetchJSON('/levels');
+        if (data) {
+          updateLevels(data.levels, data.running);
+          document.getElementById('vu-channel-l').textContent =
+            data.running ? 'L: ' + (data.levels[0] > 50 ? '-' : '') + Math.round(data.levels[0] * 0.4) + 'dB' : 'L: --dB';
+          document.getElementById('vu-channel-r').textContent =
+            data.running ? 'R: ' + (data.levels[1] > 50 ? '-' : '') + Math.round(data.levels[1] * 0.4) + 'dB' : 'R: --dB';
+          // Sync master volume slider from live data
+          if (data.volume > 0) {
+            const slider = document.getElementById('master-volume');
+            if (slider && parseInt(slider.value) !== data.volume) {
+              slider.value = data.volume;
+              document.getElementById('master-volume-label').textContent = Math.round(data.volume / 2.55) + '%';
+            }
+          }
+        }
+      } catch(e) {}
+    }
+
+    async function updateMasterVolume(value) {
+      const vol = parseInt(value);
+      document.getElementById('master-volume-label').textContent = Math.round(vol / 2.55) + '%';
+      try {
+        await fetch(API + '/volume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ volume: vol })
+        });
+        toast('Volume: ' + Math.round(vol / 2.55) + '%');
+      } catch(e) {
+        toast('Volume set failed: ' + e);
       }
     }
 
@@ -887,6 +959,22 @@
       }
     }
 
+    async function loadMasterVolume() {
+      try {
+        const r = await fetch(API + '/config');
+        const yaml = await r.text();
+        const m = yaml.match(/master_volume:\s*(\d+)/);
+        if (m && m[1]) {
+          const vol = parseInt(m[1]);
+          const slider = document.getElementById('master-volume');
+          if (slider && vol >= 0 && vol <= 255) {
+            slider.value = vol;
+            document.getElementById('master-volume-label').textContent = Math.round(vol / 2.55) + '%';
+          }
+        }
+      } catch(e) {}
+    }
+
     // Power modal
     function showPowerModal() { document.getElementById('power-modal').classList.add('visible'); }
     function hidePowerModal() { document.getElementById('power-modal').classList.remove('visible'); }
@@ -905,7 +993,9 @@
     update();
     loadAudioSettings();
     loadSinks();
+    loadMasterVolume();
     setInterval(update, 2000);
+    setInterval(updateVUMeter, 150); // Fast VU refresh
   </script>
 </body>
 </html>
