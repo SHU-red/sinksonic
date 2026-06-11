@@ -74,14 +74,22 @@ func saveAppConfig(cfg *AppConfig) error {
 	)
 	existingStr = replacer.Replace(existingStr)
 
-	keyLine := "default_sink: " + cfg.Audio.DefaultSink
 	// Simple line-based replacement: look for existing default_sink
 	lines := strings.Split(existingStr, "\n")
 	found := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "default_sink:") {
-			lines[i] = keyLine
+			// Preserve original indentation
+			indent := ""
+			for _, c := range line {
+				if c == ' ' || c == '	' {
+					indent += string(c)
+				} else {
+					break
+				}
+			}
+			lines[i] = indent + "default_sink: " + cfg.Audio.DefaultSink
 			found = true
 			break
 		}
@@ -89,27 +97,33 @@ func saveAppConfig(cfg *AppConfig) error {
 	if !found && cfg.Audio.DefaultSink != "" {
 		// Add after audio: block — find the last indented line under audio:
 		insertAt := -1
+		audioIndex := -1
 		for i, line := range lines {
-			if strings.TrimSpace(line) == "audio:" {
+			trim := strings.TrimSpace(line)
+			if trim == "audio:" {
+				audioIndex = i
 				insertAt = i
-			} else if insertAt >= 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "	") && line != "" {
-				// Next top-level key after audio
-				if i > insertAt {
-					insertAt = i - 1
-					break
+			} else if audioIndex >= 0 && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "	") || line == "") {
+				// Still inside the audio block or blank line within it
+				if line != "" {
+					insertAt = i
 				}
+			} else if audioIndex >= 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "	") && line != "" {
+				// Next top-level key — insert before this line
+				insertAt = i - 1
+				break
 			}
 		}
-		if insertAt >= 0 {
+		if audioIndex >= 0 {
 			// Insert after the last line of audio block
 			newLines := make([]string, 0, len(lines)+1)
 			newLines = append(newLines, lines[:insertAt+1]...)
-			newLines = append(newLines, "  "+keyLine)
+			newLines = append(newLines, "    default_sink: "+cfg.Audio.DefaultSink)
 			newLines = append(newLines, lines[insertAt+1:]...)
 			lines = newLines
 		} else {
 			// No audio section — append at end
-			lines = append(lines, "audio:", "  "+keyLine)
+			lines = append(lines, "audio:", "    default_sink: "+cfg.Audio.DefaultSink)
 		}
 	}
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
