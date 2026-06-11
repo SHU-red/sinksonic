@@ -614,37 +614,48 @@
         container.innerHTML = '<div class="empty">No streams discovered yet</div>';
         return;
       }
-      container.innerHTML = streams.map(s => {
-        const label = s.known ? s.host_label : s.name;
-        const healthClass = s.health === 'good' ? 'health-good' : (s.health === 'fair' ? 'health-fair' : 'health-poor');
-        const healthLabel = s.health === 'good' ? '\u25cf Stable' : (s.health === 'fair' ? '\u25cb Idle' : '\u2717 Poor');
-        const healthTip = s.health === 'good'
-          ? 'Audio flowing normally \u2014 stream is active and stable'
-          : (s.health === 'fair'
-            ? 'Connected but idle \u2014 no audio currently flowing through this stream'
-            : 'Unstable or disconnected \u2014 stream is corked, suspended, or has an unknown state');
-        const formatInfo = s.format ? s.format : '';
-        return `<div class="stream-item">
-          <div class="stream-header">
-            <div>
-              <span class="stream-name">${escapeHtml(label)}</span>
-              <span style="font-size:0.7rem;color:var(--text2);margin-left:0.5rem">${escapeHtml(formatInfo)}</span>
+      // Group streams by host_name
+      const groups = {};
+      for (const s of streams) {
+        const key = s.host_name || s.host_id || 'unknown';
+        if (!groups[key]) groups[key] = { hostName: s.host_name || s.host_id, hostLabel: s.host_label, streams: [] };
+        groups[key].streams.push(s);
+      }
+      container.innerHTML = Object.entries(groups).map(([hostKey, group]) => {
+        const hostDisplay = group.hostLabel || group.hostName || hostKey;
+        const streamHtml = group.streams.map(s => {
+          const healthClass = s.health === 'good' ? 'health-good' : (s.health === 'fair' ? 'health-fair' : 'health-poor');
+          const healthLabel = s.health === 'good' ? '\u25cf' : (s.health === 'fair' ? '\u25cb' : '\u2717');
+          const healthTip = s.health === 'good'
+            ? 'Audio flowing normally'
+            : (s.health === 'fair' ? 'Connected but idle' : 'Unstable or disconnected');
+          const streamName = s.app_name && s.app_name !== 'PipeWire' ? s.app_name : s.name;
+          return `<div class="stream-item" style="margin-bottom:0.25rem;padding:0.5rem 0.75rem">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="flex:1">
+                <span style="font-size:0.8rem;font-weight:500">${escapeHtml(streamName)}</span>
+                <span style="font-size:0.65rem;color:var(--text2);margin-left:0.5rem">${escapeHtml(s.format || '')}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.5rem">
+                <input type="range" class="volume-slider" min="0" max="255" value="${s.volume}"
+                  style="width:80px"
+                  oninput="this.nextElementSibling.textContent=Math.round(this.value/2.55)+'%'"
+                  onchange="setVolume(${s.index}, this.value)">
+                <span class="volume-value" style="min-width:2.5rem">${Math.round(s.volume / 2.55)}%</span>
+                <button class="btn ${s.muted ? 'active' : ''}" style="font-size:0.65rem;padding:0.15rem 0.4rem" onclick="toggleMute(${s.index})">
+                  ${s.muted ? 'Unmute' : 'Mute'}
+                </button>
+                <span class="health-badge ${healthClass}" style="font-size:0.65rem" title="${healthTip}">${healthLabel}</span>
+              </div>
             </div>
-            <span class="stream-status ${s.connected ? 'connected' : 'disconnected'}" style="margin-right:0.5rem">
-              ${s.connected ? 'Connected' : 'Disconnected'}
-            </span>
-            <span class="health-badge ${healthClass}" title="${healthTip}">${healthLabel}</span>
+          </div>`;
+        }).join('');
+        return `<div style="margin-bottom:0.5rem">
+          <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;padding:0 0.25rem">
+            <span style="font-weight:600;font-size:0.85rem;color:var(--accent2)">${escapeHtml(hostDisplay)}</span>
+            <span style="font-size:0.65rem;color:var(--text2)">${group.streams.length} stream${group.streams.length > 1 ? 's' : ''}</span>
           </div>
-          <div class="stream-controls">
-            <span style="font-size:0.75rem;color:var(--text2)">Vol</span>
-            <input type="range" class="volume-slider" min="0" max="255" value="${s.volume}"
-              oninput="this.nextElementSibling.textContent=Math.round(this.value/2.55)+'%'"
-              onchange="setVolume(${s.index}, this.value)">
-            <span class="volume-value">${Math.round(s.volume / 2.55)}%</span>
-            <button class="btn ${s.muted ? 'active' : ''}" onclick="toggleMute(${s.index})">
-              ${s.muted ? 'Unmute' : 'Mute'}
-            </button>
-          </div>
+          ${streamHtml}
         </div>`;
       }).join('');
     }
@@ -663,22 +674,21 @@
         return;
       }
       container.innerHTML = hosts.map(h => {
-        // Find matching stream for richer info
-        const stream = streams.find(s => s.host_id === h.id);
-        const healthClass = h.connected ? (stream && stream.health === 'good' ? 'health-good' : (stream && stream.health === 'fair' ? 'health-fair' : 'health-poor')) : 'health-poor';
+        // Find all streams from this host
+        const hostStreams = streams.filter(s => s.host_id === h.id || s.host_name === h.id || s.host_name === h.label);
+        const streamCount = hostStreams.length;
+        const overallHealth = hostStreams.some(s => s.health === 'good') ? 'good'
+          : (hostStreams.some(s => s.health === 'fair') ? 'fair' : 'poor');
+        const healthClass = h.connected ? 'health-' + overallHealth : 'health-poor';
         const healthLabel = h.connected
-          ? (stream && stream.health === 'good' ? '\u25cf Stable'
-            : (stream && stream.health === 'fair' ? '\u25cb Idle' : '\u2717 Poor'))
+          ? (overallHealth === 'good' ? '\u25cf Stable'
+            : (overallHealth === 'fair' ? '\u25cb Idle' : '\u2717 Poor'))
           : '\u2717 Offline';
-        const healthTip = stream
-          ? (stream.health === 'good'
-            ? 'Audio flowing normally \u2014 stream is active and stable'
-            : (stream.health === 'fair'
-              ? 'Connected but idle \u2014 no audio currently flowing'
-              : 'Unstable or disconnected'))
+        const healthTip = streamCount > 0
+          ? (overallHealth === 'good' ? 'Audio flowing normally'
+            : (overallHealth === 'fair' ? 'Connected but idle' : 'Unstable'))
           : (h.connected ? 'Connected, no stream data' : 'Host is offline');
-        const formatInfo = stream && stream.format ? stream.format : '';
-        const stateLabel = stream && stream.state ? stream.state : '';
+        const activeCount = hostStreams.filter(s => s.state === 'active' || s.state === 'running').length;
         return `
         <div class="host-item ${h.connected ? 'connected' : ''}">
           <div class="host-header">
@@ -688,10 +698,13 @@
                   onchange="updateHostLabel('${escapeHtml(h.id)}', this.value)"
                   placeholder="Host name">
               </div>
-              <div class="host-id">${escapeHtml(h.id)} ${h.connected ? '\u2022 connected' : ''}</div>
-              <div style="font-size:0.7rem;color:var(--text2);margin-top:0.25rem">
-                ${escapeHtml(formatInfo)}${formatInfo && stateLabel ? ' &middot; ' : ''}${escapeHtml(stateLabel)}
-              </div>
+              <div class="host-id">${escapeHtml(h.id)} ${h.connected ? '\u2022 ' + streamCount + ' stream' + (streamCount !== 1 ? 's' : '') : ''}</div>
+              ${activeCount > 0 ? '<div style="font-size:0.7rem;color:var(--green);margin-top:0.25rem">' + activeCount + ' active</div>' : ''}
+              ${streamCount > 0 ? '<div style="margin-top:0.35rem;display:flex;flex-wrap:wrap;gap:0.25rem">' + hostStreams.map(s => {
+                const sn = s.app_name && s.app_name !== 'PipeWire' ? s.app_name : s.name;
+                const sh = s.health === 'good' ? 'var(--green)' : (s.health === 'fair' ? 'var(--yellow)' : 'var(--red)');
+                return '<span style="font-size:0.6rem;padding:0.1rem 0.35rem;border-radius:3px;background:var(--surface2);border:1px solid ' + sh + '">' + escapeHtml(sn) + '</span>';
+              }).join('') + '</div>' : ''}
             </div>
             <div style="display:flex;align-items:center;gap:0.5rem">
               <span class="health-badge ${healthClass}" title="${healthTip}">${healthLabel}</span>

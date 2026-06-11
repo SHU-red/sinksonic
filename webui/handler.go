@@ -314,6 +314,8 @@ type StreamResponse struct {
 	State     string `json:"state"`      // "active", "idle", "corked"
 	Format    string `json:"format"`     // e.g. "s16le 2ch 48000Hz"
 	Health    string `json:"health"`     // "good", "fair", "poor"
+	AppName   string `json:"app_name"`   // application.name (e.g. "Firefox")
+	HostName  string `json:"host_name"`  // host identity (e.g. "shured@fedora")
 }
 
 type VolumeRequest struct {
@@ -512,7 +514,9 @@ func isPipeWireRunning() bool {
 type streamNodeInfo struct {
 	nodeName   string
 	state      string
-	sinkFormat string // combined format from ALSA sink, e.g. "S16LE 2ch 48000Hz"
+	sinkFormat  string // combined format from ALSA sink, e.g. "S16LE 2ch 48000Hz"
+	appName    string // application.name (e.g. "Firefox")
+	hostName   string // host identifier (e.g. "shured@fedora")
 }
 
 func getStreamNodeInfo() map[string]streamNodeInfo {
@@ -554,6 +558,34 @@ func getStreamNodeInfo() map[string]streamNodeInfo {
 		if info.nodeName == "" {
 			if n, ok := props["application.name"].(string); ok {
 				info.nodeName = n
+			}
+		}
+
+		// Extract application name for display
+		if a, ok := props["application.name"].(string); ok {
+			info.appName = a
+		}
+		if info.appName == "" {
+			if n, ok := props["media.name"].(string); ok {
+				info.appName = n
+			}
+		}
+
+		// Extract host identity from media.name or application.process.host/user
+		if mn, ok := props["media.name"].(string); ok && strings.Contains(mn, "Tunnel for ") {
+			// "Tunnel for shured@fedora" → "shured@fedora"
+			info.hostName = strings.TrimPrefix(mn, "Tunnel for ")
+		}
+		if info.hostName == "" {
+			host, _ := props["application.process.host"].(string)
+			user, _ := props["application.process.user"].(string)
+			if host != "" && user != "" {
+				info.hostName = user + "@" + host
+			} else if host != "" {
+				info.hostName = host
+			} else {
+				// Fallback: use a shortened node name as host identity
+				info.hostName = info.nodeName
 			}
 		}
 
@@ -707,6 +739,8 @@ func parseWpctlStatus() []StreamResponse {
 		nodeName := ni.nodeName
 		state := ni.state
 		formatStr := ni.sinkFormat  // combined format from ALSA sink
+		appName := ni.appName
+		hostName := ni.hostName
 		if nodeName == "" {
 			nodeName = name
 		}
@@ -735,9 +769,17 @@ func parseWpctlStatus() []StreamResponse {
 			friendlyState = "active"
 		}
 
-		// Match against known hosts
-		hostID := nodeName
-		hostLabel := name
+		// Use the real host identity for grouping
+		// hostID is the stable host key (e.g. "shured@fedora")
+		// hostLabel is the display name
+		hostID := hostName
+		if hostID == "" {
+			hostID = nodeName
+		}
+		hostLabel := hostName
+		if hostLabel == "" {
+			hostLabel = name
+		}
 		known := false
 		if hc := findHost(hf, hostID); hc != nil {
 			hostLabel = hc.Label
@@ -748,9 +790,15 @@ func parseWpctlStatus() []StreamResponse {
 			muted = hc.Muted
 		}
 
+		// Build a display name from the application name
+		displayName := name
+		if appName != "" && appName != "PipeWire" {
+			displayName = appName
+		}
+
 		streams = append(streams, StreamResponse{
 			Index:     idx,
-			Name:      name,
+			Name:      displayName,
 			NodeName:  nodeName,
 			NodeID:    nodeID,
 			Volume:    volume,
@@ -762,6 +810,8 @@ func parseWpctlStatus() []StreamResponse {
 			State:     friendlyState,
 			Format:    formatStr,
 			Health:    health,
+			AppName:   appName,
+			HostName:  hostName,
 		})
 		idx++
 	}
