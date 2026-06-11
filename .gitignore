@@ -13,6 +13,5 @@ result-dev/
 *.swp
 Thumbs.db
 .vscode/
-webui/go.sum
 webui/sinksonic-webui
 *.xz
