@@ -861,6 +861,125 @@ func getDefaultSinkID() string {
 	return ""
 }
 
+// moveStreamsToSink moves all active stream (sink-input) outputs
+// to the specified sink using pw-link. This ensures existing audio
+// streams are re-routed when the default sink changes.
+func moveStreamsToSink(sinkName string) {
+	// Get list of output ports (streams)
+	out, err := runCmd(3*time.Second, "pw-link", "-o")
+	if err != nil {
+		log.Printf("moveStreamsToSink: pw-link -o failed: %v", err)
+		return
+	}
+
+	// Get list of input ports on the target sink
+	inOut, inErr := runCmd(3*time.Second, "pw-link", "-i")
+	if inErr != nil {
+		log.Printf("moveStreamsToSink: pw-link -i failed: %v", inErr)
+		return
+	}
+
+	// Build set of target sink input ports
+	targetLines := strings.Split(inOut, "\n")
+	targetPorts := make(map[string]bool)
+	for _, line := range targetLines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, sinkName+":playback_") || strings.Contains(trimmed, sinkName+":monitor_") {
+			targetPorts[trimmed] = true
+		}
+	}
+
+	if len(targetPorts) == 0 {
+		log.Printf("moveStreamsToSink: no target ports found for sink %s", sinkName)
+		return
+	}
+
+	// Get current links
+	linksOut, linksErr := runCmd(3*time.Second, "pw-link", "-l")
+	if linksErr != nil {
+		log.Printf("moveStreamsToSink: pw-link -l failed: %v", linksErr)
+		return
+	}
+
+	// Parse links to find stream output -> sink connections
+	// pw-link -l format:
+	//   sink:port_FL
+	//     |<- stream:output_FL
+	//   sink:port_FR
+	//     |<- stream:output_FR
+	//   stream:output_FL
+	//     |-> sink:port_FL
+	//     |-> sink2:port_FL
+	streamOutputs := strings.Split(out, "\n")
+	links := strings.Split(linksOut, "\n")
+
+	for _, so := range streamOutputs {
+		soTrim := strings.TrimSpace(so)
+		// Skip monitors and non-stream ports
+		if strings.Contains(soTrim, "monitor_") {
+			continue
+		}
+		if !strings.Contains(soTrim, ":output_") && !strings.Contains(soTrim, ":capture_") {
+			continue
+		}
+
+		// Find all links from this stream output
+		// Look for lines like "  |-> sink:port" below this output in pw-link -l
+		var connectedTo []string
+		inThisStream := false
+		for _, linkLine := range links {
+			l := strings.TrimSpace(linkLine)
+			if l == soTrim {
+				inThisStream = true
+				continue
+			}
+			if inThisStream {
+				if strings.HasPrefix(l, "|-") || strings.HasPrefix(l, "`-") || strings.HasPrefix(l, "|->") || strings.HasPrefix(l, "`->") {
+					// Extract the target port (after "-> ")
+					if idx := strings.Index(l, "-> "); idx >= 0 {
+						target := strings.TrimSpace(l[idx+3:])
+						connectedTo = append(connectedTo, target)
+					}
+				} else if l == "" || (!strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "|") && !strings.HasPrefix(l, "`")) {
+					inThisStream = false
+				}
+			}
+		}
+
+		for _, conn := range connectedTo {
+			// Is this connected to a different sink?
+			isTarget := false
+			for tp := range targetPorts {
+				if conn == tp {
+					isTarget = true
+					break
+				}
+			}
+
+			if !isTarget {
+				// Disconnect from the old sink
+				runCmd(2*time.Second, "pw-link", "-d", soTrim, conn)
+				log.Printf("moveStreamsToSink: disconnected %s from %s", soTrim, conn)
+			}
+		}
+
+		// Connect to all target sink ports (if not already connected)
+		for tp := range targetPorts {
+			already := false
+			for _, conn := range connectedTo {
+				if conn == tp {
+					already = true
+					break
+				}
+			}
+			if !already {
+				runCmd(2*time.Second, "pw-link", soTrim, tp)
+				log.Printf("moveStreamsToSink: connected %s to %s", soTrim, tp)
+			}
+		}
+	}
+}
+
 // --- Sink API handlers ---
 
 func apiSinks(w http.ResponseWriter, r *http.Request) {
@@ -923,11 +1042,15 @@ func apiDefaultSink(w http.ResponseWriter, r *http.Request) {
 			sinks := parseSinksFromPwDump()
 			for _, s := range sinks {
 				if s.Name == sinkName {
-					runCmd(3*time.Second, "wpctl", "set-default", strconv.Itoa(s.ID))
+					sinkID = strconv.Itoa(s.ID)
+					runCmd(3*time.Second, "wpctl", "set-default", sinkID)
 					break
 				}
 			}
 		}
+
+		// Move all active stream outputs to the selected sink
+		moveStreamsToSink(sinkName)
 
 		// Save to persistent config
 		cfg := loadAppConfig()
