@@ -777,12 +777,12 @@ func parseSinksFromPwDump() []SinkInfo {
 		if n, ok := props["node.name"].(string); ok {
 			info.Name = n
 		}
-		if d, ok := props["node.description"].(string); ok {
+		if d, ok := props["node.nick"].(string); ok {
 			info.Description = d
 		}
 		if info.Description == "" {
-			if n, ok := props["node.nick"].(string); ok {
-				info.Description = n
+			if d, ok := props["node.description"].(string); ok {
+				info.Description = d
 			}
 		}
 		if info.Description == "" {
