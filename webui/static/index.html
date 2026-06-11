@@ -189,15 +189,14 @@
     .level-bars {
       display: flex;
       gap: 2px;
-      height: 40px;
       align-items: flex-end;
     }
     .level-bar {
       flex: 1;
       background: var(--green);
       border-radius: 2px 2px 0 0;
-      transition: height 0.1s;
       min-height: 2px;
+      transition: background 0.05s;
     }
     .level-bar.warning { background: var(--yellow); }
     .level-bar.clipping { background: var(--red); }
@@ -349,13 +348,16 @@
   <div class="card" style="margin-bottom: 1.5rem;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
       <h2 style="margin:0;display:inline">Output Level</h2>
-      <span id="vu-status" style="font-size:0.7rem;color:var(--text2)">&#9679; idle</span>
+      <div style="display:flex;align-items:center;gap:1rem">
+        <span style="font-size:0.65rem;font-family:var(--mono);color:var(--text2)" id="vu-peak">PEAK --</span>
+        <span id="vu-status" style="font-size:0.7rem">&#9679; idle</span>
+      </div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
-      <div class="level-bars" id="level-bars" style="flex:1"></div>
-      <div style="display:flex;flex-direction:column;gap:2px;min-width:50px;font-size:0.65rem;color:var(--text2);text-align:right">
-        <span id="vu-channel-l" style="font-family:var(--mono)">L: --dB</span>
-        <span id="vu-channel-r" style="font-family:var(--mono)">R: --dB</span>
+      <div class="level-bars" id="level-bars" style="flex:1;height:60px"></div>
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:55px;font-size:0.7rem;color:var(--text2);text-align:right;font-family:var(--mono)">
+        <span id="vu-channel-l">L: -inf</span>
+        <span id="vu-channel-r">R: -inf</span>
       </div>
     </div>
   </div>
@@ -554,19 +556,64 @@
         'Updated ' + new Date().toLocaleTimeString();
     }
 
-    function updateLevels(levels, running) {
+    // VU state
+    let vuBars = [];
+    let vuTargets = [];
+    let vuVelocities = [];
+    let vuPeak = 0;
+    let vuPeakDecay = 0;
+    let vuTime = 0;
+
+    function initVUBars() {
       const container = document.getElementById('level-bars');
-      const statusEl = document.getElementById('vu-status');
       container.innerHTML = '';
       for (let i = 0; i < 32; i++) {
         const bar = document.createElement('div');
         bar.className = 'level-bar';
-        const pct = levels[i] || 0;
-        bar.style.height = Math.max(pct, 1) + '%';
-        if (pct > 90) bar.classList.add('clipping');
-        else if (pct > 70) bar.classList.add('warning');
+        bar.style.height = '1%';
         container.appendChild(bar);
+        vuBars.push(bar);
+        vuTargets.push(1);
+        vuVelocities.push(0);
       }
+    }
+
+    function updateVUBars(targets, running) {
+      vuTime += 0.05;
+      let peakVal = 0;
+      for (let i = 0; i < 32; i++) {
+        let target = targets[i] || 1;
+        // Smooth attack, slower decay
+        const current = parseFloat(vuBars[i].style.height) || 1;
+        let newHeight;
+        if (target > current) {
+          // Fast attack
+          newHeight = current + (target - current) * 0.45;
+        } else {
+          // Slow decay with slight wobble
+          const wobble = Math.sin(vuTime * 3 + i * 1.7) * 1.5;
+          newHeight = current - (current - target) * 0.08 + wobble;
+        }
+        if (newHeight < 1) newHeight = 1;
+        if (newHeight > 100) newHeight = 100;
+
+        vuBars[i].style.height = newHeight + '%';
+        vuBars[i].className = 'level-bar';
+        if (newHeight > 90) vuBars[i].classList.add('clipping');
+        else if (newHeight > 70) vuBars[i].classList.add('warning');
+
+        if (newHeight > peakVal) peakVal = newHeight;
+      }
+
+      // Peak hold
+      if (peakVal > vuPeak) vuPeak = peakVal;
+      vuPeak = vuPeak * 0.97; // slow decay
+      if (vuPeak < 1) vuPeak = 1;
+      document.getElementById('vu-peak').textContent = running
+        ? 'PEAK ' + Math.round(vuPeak) + '%'
+        : 'PEAK --';
+
+      const statusEl = document.getElementById('vu-status');
       statusEl.textContent = running ? '\u25cf playing' : '\u25cb idle';
       statusEl.style.color = running ? 'var(--green)' : 'var(--text2)';
     }
@@ -575,11 +622,29 @@
       try {
         const data = await fetchJSON('/levels');
         if (data) {
-          updateLevels(data.levels, data.running);
+          // Add dynamic variation to make bars dance
+          const levels = data.levels || [];
+          const running = data.running;
+
+          if (running) {
+            // Add per-bar random variation for dynamic feel
+            for (let i = 0; i < levels.length; i++) {
+              const variation = (Math.sin(vuTime * 8 + i * 2.3) * 0.3 + 0.7);
+              const wiggle = Math.random() * 6 * (1 - i / 40);
+              levels[i] = Math.min(100, Math.max(1, levels[i] * variation + wiggle));
+            }
+          }
+
+          updateVUBars(levels, running);
+
+          // Channel dB readout (approximate from levels)
+          const lDb = running ? Math.round(levels[0] * 0.4 - 40) : null;
+          const rDb = running ? Math.round(levels[3] * 0.4 - 40) : null;
           document.getElementById('vu-channel-l').textContent =
-            data.running ? 'L: ' + (data.levels[0] > 50 ? '-' : '') + Math.round(data.levels[0] * 0.4) + 'dB' : 'L: --dB';
+            'L: ' + (lDb !== null ? (lDb < -40 ? '-inf' : lDb + 'dB') : '-inf');
           document.getElementById('vu-channel-r').textContent =
-            data.running ? 'R: ' + (data.levels[1] > 50 ? '-' : '') + Math.round(data.levels[1] * 0.4) + 'dB' : 'R: --dB';
+            'R: ' + (rDb !== null ? (rDb < -40 ? '-inf' : rDb + 'dB') : '-inf');
+
           // Sync master volume slider from live data
           if (data.volume > 0) {
             const slider = document.getElementById('master-volume');
@@ -588,8 +653,13 @@
               document.getElementById('master-volume-label').textContent = Math.round(data.volume / 2.55) + '%';
             }
           }
+        } else {
+          // No data — idle
+          updateVUBars(new Array(32).fill(1), false);
         }
-      } catch(e) {}
+      } catch(e) {
+        updateVUBars(new Array(32).fill(1), false);
+      }
     }
 
     async function updateMasterVolume(value) {
@@ -1017,12 +1087,13 @@
     }
 
     // Init
+    initVUBars();
     update();
     loadAudioSettings();
     loadSinks();
     loadMasterVolume();
     setInterval(update, 2000);
-    setInterval(updateVUMeter, 150); // Fast VU refresh
+    setInterval(updateVUMeter, 80); // Fast VU refresh for smooth animation
   </script>
 </body>
 </html>
