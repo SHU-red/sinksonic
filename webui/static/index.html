@@ -367,6 +367,12 @@
       <span class="stat-label">Latency Target (ms)</span>
       <input type="number" id="setting-latency" min="1" max="100" step="1" value="10" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:0.25rem 0.5rem;border-radius:4px;width:120px">
     </div>
+    <div class="stat-row">
+      <span class="stat-label">Default Output</span>
+      <select id="setting-sink" onchange="setDefaultSink(this.value)" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);padding:0.25rem 0.5rem;border-radius:4px;flex:1;max-width:280px;cursor:pointer">
+        <option value="">Loading sinks...</option>
+      </select>
+    </div>
     <div style="margin-top:0.75rem;display:flex;gap:0.5rem">
       <button class="btn" onclick="applyAudioSettings()">Apply Now</button>
       <button class="btn btn-warn" onclick="saveAudioSettings()">Save &amp; Reboot</button>
@@ -838,6 +844,49 @@
       } catch(e) {}
     }
 
+    // Sink selection
+    async function loadSinks() {
+      try {
+        const sinks = await fetchJSON('/sinks');
+        const sel = document.getElementById('setting-sink');
+        if (!sinks || sinks.length === 0) {
+          sel.innerHTML = '<option value="">No sinks found</option>';
+          return;
+        }
+        sel.innerHTML = sinks.map(s => {
+          const active = s.active ? ' \u2605' : '';
+          return '<option value="' + s.name + '">' + escapeHtml(s.description) + active + '</option>';
+        }).join('');
+        // Select the currently configured one
+        const cfg = await fetchJSON('/sink/default');
+        if (cfg && cfg.default_sink) {
+          sel.value = cfg.default_sink;
+        }
+        // If configured value isn't in list, select the active sink
+        if (sel.value === '' || !Array.from(sel.options).some(o => o.value === sel.value)) {
+          const activeSink = sinks.find(s => s.active);
+          if (activeSink) sel.value = activeSink.name;
+        }
+      } catch(e) {
+        document.getElementById('setting-sink').innerHTML = '<option value="">Failed to load sinks</option>';
+      }
+    }
+
+    async function setDefaultSink(sinkName) {
+      if (!sinkName) return;
+      try {
+        const r = await fetch(API + '/sink/default', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sink_name: sinkName })
+        });
+        const result = await r.json();
+        toast('Output set to: ' + sinkName);
+      } catch(e) {
+        toast('Failed to set sink: ' + e);
+      }
+    }
+
     // Power modal
     function showPowerModal() { document.getElementById('power-modal').classList.add('visible'); }
     function hidePowerModal() { document.getElementById('power-modal').classList.remove('visible'); }
@@ -855,6 +904,7 @@
     // Init
     update();
     loadAudioSettings();
+    loadSinks();
     setInterval(update, 2000);
   </script>
 </body>

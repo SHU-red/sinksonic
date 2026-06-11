@@ -12,16 +12,144 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // configPath is the path to the persistent config file.
 var configPath string
+
+// --- Persistent config (sinksonic.yaml) ---
+
+type AudioConfig struct {
+	ResampleQuality  int    `yaml:"resample_quality"`
+	BufferSize       int    `yaml:"buffer_size"`
+	LatencyTargetMs  int    `yaml:"latency_target_ms"`
+	DefaultSink      string `yaml:"default_sink"`
+}
+
+type AppConfig struct {
+	Audio AudioConfig `yaml:"audio"`
+}
+
+func defaultAppConfig() *AppConfig {
+	return &AppConfig{
+		Audio: AudioConfig{
+			ResampleQuality: 14,
+			BufferSize:      2048,
+			LatencyTargetMs: 10,
+		},
+	}
+}
+
+func loadAppConfig() *AppConfig {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return defaultAppConfig()
+	}
+	var cfg AppConfig
+	if err := yaml.Unmarshal(content, &cfg); err != nil {
+		log.Printf("Failed to parse config: %v, using defaults", err)
+		return defaultAppConfig()
+	}
+	return &cfg
+}
+
+func saveAppConfig(cfg *AppConfig) error {
+	// Read existing config to preserve unknown keys (frontend may have set other fields)
+	existing, err := os.ReadFile(configPath)
+	existingStr := string(existing)
+	if err != nil {
+		// File doesn't exist yet — write full struct
+		fullData, marshalErr := yaml.Marshal(cfg)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		return os.WriteFile(configPath, fullData, 0644)
+	}
+
+	// Set or add default_sink in the existing YAML text
+	replacer := strings.NewReplacer(
+		"\r\n", "\n",
+	)
+	existingStr = replacer.Replace(existingStr)
+
+	keyLine := "default_sink: " + cfg.Audio.DefaultSink
+	// Simple line-based replacement: look for existing default_sink
+	lines := strings.Split(existingStr, "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "default_sink:") {
+			lines[i] = keyLine
+			found = true
+			break
+		}
+	}
+	if !found && cfg.Audio.DefaultSink != "" {
+		// Add after audio: block — find the last indented line under audio:
+		insertAt := -1
+		for i, line := range lines {
+			if strings.TrimSpace(line) == "audio:" {
+				insertAt = i
+			} else if insertAt >= 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "	") && line != "" {
+				// Next top-level key after audio
+				if i > insertAt {
+					insertAt = i - 1
+					break
+				}
+			}
+		}
+		if insertAt >= 0 {
+			// Insert after the last line of audio block
+			newLines := make([]string, 0, len(lines)+1)
+			newLines = append(newLines, lines[:insertAt+1]...)
+			newLines = append(newLines, "  "+keyLine)
+			newLines = append(newLines, lines[insertAt+1:]...)
+			lines = newLines
+		} else {
+			// No audio section — append at end
+			lines = append(lines, "audio:", "  "+keyLine)
+		}
+	}
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+}
+
+// --- Sink types ---
+
+type SinkInfo struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Active      bool   `json:"active"`
+	State       string `json:"state"`
+}
 
 func init() {
 	configPath = os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		configPath = "/data/sinksonic.yaml"
 	}
+	// Apply default sink from config on startup
+	applyDefaultSinkFromConfig()
+}
+
+// applyDefaultSinkFromConfig reads the config and sets the default sink if configured.
+func applyDefaultSinkFromConfig() {
+	cfg := loadAppConfig()
+	if cfg.Audio.DefaultSink == "" {
+		return
+	}
+	// Find the node ID for this sink name from pw-dump
+	sinks := parseSinksFromPwDump()
+	for _, s := range sinks {
+		if s.Name == cfg.Audio.DefaultSink {
+			log.Printf("Applying default sink: %s (id %d)", cfg.Audio.DefaultSink, s.ID)
+			runCmd(3*time.Second, "wpctl", "set-default", strconv.Itoa(s.ID))
+			return
+		}
+	}
+	log.Printf("Default sink '%s' not found among available sinks", cfg.Audio.DefaultSink)
 }
 
 // --- Hosts management ---
@@ -606,6 +734,202 @@ func parseWpctlStatus() []StreamResponse {
 	}
 
 	return streams
+}
+
+// parseSinksFromPwDump returns all Audio/Sink nodes from pw-dump.
+// This is used for the sink selection dropdown in the web UI.
+func parseSinksFromPwDump() []SinkInfo {
+	dump, err := runCmd(5*time.Second, "pw-dump")
+	if err != nil {
+		return nil
+	}
+
+	var objects []struct {
+		ID   int    `json:"id"`
+		Type string `json:"type"`
+		Info *struct {
+			Props map[string]interface{} `json:"props"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal([]byte(dump), &objects); err != nil {
+		return nil
+	}
+
+	// Get the current default sink node ID from wpctl status
+	currentDefault := getDefaultSinkID()
+
+	var sinks []SinkInfo
+	for _, obj := range objects {
+		if obj.Info == nil || obj.Info.Props == nil {
+			continue
+		}
+		props := obj.Info.Props
+
+		mediaClass, _ := props["media.class"].(string)
+		if mediaClass != "Audio/Sink" {
+			continue
+		}
+
+		info := SinkInfo{
+			ID: obj.ID,
+		}
+
+		if n, ok := props["node.name"].(string); ok {
+			info.Name = n
+		}
+		if d, ok := props["node.description"].(string); ok {
+			info.Description = d
+		}
+		if info.Description == "" {
+			if n, ok := props["node.nick"].(string); ok {
+				info.Description = n
+			}
+		}
+		if info.Description == "" {
+			info.Description = info.Name
+		}
+
+		if s, ok := props["state"].(string); ok {
+			info.State = s
+		}
+
+		nodeIDStr := strconv.Itoa(obj.ID)
+		info.Active = nodeIDStr == currentDefault || info.Name == currentDefault
+
+		sinks = append(sinks, info)
+	}
+	return sinks
+}
+
+// getDefaultSinkID returns the node ID of the current default sink from wpctl status.
+func getDefaultSinkID() string {
+	out, err := runCmd(3*time.Second, "wpctl", "status")
+	if err != nil {
+		return ""
+	}
+	// Look for the line with the asterisk (*) under Sinks section
+	inSinks := false
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "Sinks:") || (strings.Contains(trimmed, "Sinks") && len(trimmed) < 20) {
+			inSinks = true
+			continue
+		}
+		if inSinks && (trimmed == "" || strings.HasPrefix(trimmed, "├─") || strings.HasPrefix(trimmed, "└─") || strings.HasPrefix(trimmed, "│")) == false {
+			inSinks = false
+			continue
+		}
+		if !inSinks {
+			continue
+		}
+		// Look for default marker *
+		if strings.Contains(trimmed, "*") {
+			cleaned := strings.NewReplacer("│", "", "├", "", "└", "", "─", "", "*", "").Replace(trimmed)
+			cleaned = strings.TrimSpace(cleaned)
+			parts := strings.Fields(cleaned)
+			if len(parts) >= 1 {
+				return strings.TrimRight(parts[0], ".")
+			}
+		}
+	}
+	// Fallback: try pactl info
+	out2, err2 := runCmd(3*time.Second, "pactl", "info")
+	if err2 == nil {
+		for _, line := range strings.Split(out2, "\n") {
+			if strings.Contains(line, "Default Sink:") {
+				parts := strings.Split(line, ":")
+				if len(parts) >= 2 {
+					return strings.TrimSpace(parts[1])
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// --- Sink API handlers ---
+
+func apiSinks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sinks := parseSinksFromPwDump()
+	if sinks == nil {
+		sinks = []SinkInfo{}
+	}
+	writeJSON(w, sinks)
+}
+
+func apiDefaultSink(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := loadAppConfig()
+		writeJSON(w, map[string]string{"default_sink": cfg.Audio.DefaultSink})
+
+	case http.MethodPost:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			SinkID   string `json:"sink_id"`
+			SinkName string `json:"sink_name"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		sinkName := req.SinkName
+		sinkID := req.SinkID
+
+		// If we only have the ID, resolve to name
+		if sinkName == "" && sinkID != "" {
+			sinks := parseSinksFromPwDump()
+			for _, s := range sinks {
+				if strconv.Itoa(s.ID) == sinkID {
+					sinkName = s.Name
+					break
+				}
+			}
+		}
+
+		if sinkName == "" {
+			http.Error(w, "Missing sink_name", http.StatusBadRequest)
+			return
+		}
+
+		// Apply immediately via wpctl
+		if sinkID != "" {
+			runCmd(3*time.Second, "wpctl", "set-default", sinkID)
+		} else {
+			// Find the ID for the name
+			sinks := parseSinksFromPwDump()
+			for _, s := range sinks {
+				if s.Name == sinkName {
+					runCmd(3*time.Second, "wpctl", "set-default", strconv.Itoa(s.ID))
+					break
+				}
+			}
+		}
+
+		// Save to persistent config
+		cfg := loadAppConfig()
+		cfg.Audio.DefaultSink = sinkName
+		if err := saveAppConfig(cfg); err != nil {
+			log.Printf("Failed to save default sink to config: %v", err)
+			writeJSON(w, map[string]string{"status": "applied", "warning": "config not saved"})
+			return
+		}
+
+		log.Printf("Default sink set to: %s", sinkName)
+		writeJSON(w, map[string]string{"status": "saved", "default_sink": sinkName})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // --- JSON response helper ---
