@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -160,6 +161,8 @@ func init() {
 	}
 	// Apply default sink from config on startup
 	applyDefaultSinkFromConfig()
+	// Start persistent VU meter (parec stays connected, no reconnect churn)
+	initVUParec()
 }
 
 // applyDefaultSinkFromConfig reads the config and sets the default sink if configured.
@@ -1330,67 +1333,93 @@ type LevelsResponse struct {
 	StreamCount int     `json:"stream_count"`
 }
 
-// alsaIsRunning checks if the ALSA PCM device is in RUNNING state.
-func alsaIsRunning(card int, sub int) bool {
-	path := fmt.Sprintf("/proc/asound/card%d/pcm%dp/sub%d/status", card, sub, sub)
-	content, err := os.ReadFile(path)
-	return err == nil && strings.Contains(string(content), "state: RUNNING")
+// vuParec is a persistent parec process that captures monitor audio
+// and provides real RMS levels without reconnect churn.
+var vuParecCmd *exec.Cmd
+var vuParecOut io.ReadCloser
+var vuMu sync.Mutex
+var vuLastL, vuLastR float64
+var vuLastRunning bool
+
+func initVUParec() {
+	monitor := "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
+
+	vuParecCmd = exec.Command("parec",
+		"--device="+monitor,
+		"--rate=120",
+		"--channels=2",
+		"--format=s16le",
+		"--raw",
+		"--latency=1",
+	)
+	vuParecCmd.Env = append(os.Environ(),
+		"PULSE_SERVER=unix:"+os.Getenv("XDG_RUNTIME_DIR")+"/pulse/native",
+		"PULSE_PROP_media.name=sinksonic-vu-meter",
+	)
+
+	var err error
+	vuParecOut, err = vuParecCmd.StdoutPipe()
+	if err != nil {
+		log.Printf("VU parec pipe error: %v", err)
+		return
+	}
+
+	if err := vuParecCmd.Start(); err != nil {
+		log.Printf("VU parec start error: %v", err)
+		vuParecOut = nil
+		return
+	}
+
+	// Read samples in background goroutine
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := vuParecOut.Read(buf)
+			if err != nil || n < 4 {
+				vuMu.Lock()
+				vuLastRunning = false
+				vuMu.Unlock()
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			// Compute RMS from available samples
+			numSamples := n / 4
+			if numSamples > 100 {
+				numSamples = 100
+			}
+			var sumL, sumR int64
+			for i := 0; i < numSamples; i++ {
+				off := i * 4
+				s := int16(int(buf[off]) | int(buf[off+1])<<8)
+				sumL += int64(s) * int64(s)
+				s = int16(int(buf[off+2]) | int(buf[off+3])<<8)
+				sumR += int64(s) * int64(s)
+			}
+
+			vuMu.Lock()
+			// Scale RMS to 0-100 using: 1 - 1/(RMS/scale+1)
+			rmsL := float64(sumL) / float64(numSamples)
+			rmsR := float64(sumR) / float64(numSamples)
+			vuLastL = (1 - 1/(rmsL/100000+1)) * 100
+			vuLastR = (1 - 1/(rmsR/100000+1)) * 100
+			if vuLastL > 100 {
+				vuLastL = 100
+			}
+			if vuLastR > 100 {
+				vuLastR = 100
+			}
+			vuLastRunning = vuLastL > 1 || vuLastR > 1
+			vuMu.Unlock()
+		}
+	}()
+	log.Println("VU parec started (persistent monitor capture)")
 }
 
-// alsaHwActivity reads the ALSA hardware pointer change rate as a proxy
-// for audio activity. Does NOT touch pipewire/pulse — pure procfs reads.
-func alsaHwActivity(card int, sub int) (float64, float64) {
-	path := fmt.Sprintf("/proc/asound/card%d/pcm%dp/sub%d/status", card, sub, sub)
-	const sampleRate = 48000.0
-
-	readHwPtr := func() (int64, bool) {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return 0, false
-		}
-		for _, line := range strings.Split(string(content), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "hw_ptr") {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					hp, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
-					return hp, err == nil
-				}
-			}
-		}
-		return 0, false
-	}
-
-	h1, ok1 := readHwPtr()
-	if !ok1 {
-		return 0, 0
-	}
-
-	// Wait ~50ms for hw_ptr to advance
-	time.Sleep(50 * time.Millisecond)
-
-	h2, ok2 := readHwPtr()
-	if !ok2 {
-		return 0, 0
-	}
-
-	delta := h2 - h1
-	if delta < 0 {
-		// Wraparound
-		delta += 1 << 32
-	}
-
-	// At 48kHz, 50ms = 2400 samples per channel at full activity
-	expectedMax := sampleRate * 0.05 // ~2400
-	activity := float64(delta) / expectedMax * 100
-	if activity > 100 {
-		activity = 100
-	}
-	if activity < 1 {
-		activity = 0
-	}
-
-	return activity, activity
+func getVULevels() (float64, float64, bool) {
+	vuMu.Lock()
+	defer vuMu.Unlock()
+	return vuLastL, vuLastR, vuLastRunning
 }
 
 func apiLevels(w http.ResponseWriter, r *http.Request) {
@@ -1404,31 +1433,12 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 		Channels: 2,
 	}
 
-	// Get real audio activity directly from ALSA (zero pipewire/pulse interaction)
-	// Card 1 = Headphones on Pi 3B, Card 0 = HDMI
-	alsaActive := alsaIsRunning(1, 0) || alsaIsRunning(0, 0)
-
-	lLevel := 0.0
-	rLevel := 0.0
-	if alsaActive {
-		// Try headphones first, then HDMI
-		lLevel, rLevel = alsaHwActivity(1, 0)
-		if lLevel < 1 {
-			lLevel, rLevel = alsaHwActivity(0, 0)
-		}
-	}
-
-	res.Running = alsaActive
-	res.StreamCount = 0 // not critical for VU display
-
-	// Get stream count from a quick pw-dump check (runs every 3rd poll at most)
-	if alsaActive {
-		pwOut, _ := runCmd(2*time.Second, "pw-dump")
-		if pwOut != "" {
-			if strings.Contains(pwOut, "Stream/Output/Audio") {
-				res.StreamCount = strings.Count(pwOut, "Stream/Output/Audio")
-			}
-		}
+	// Get real audio levels from persistent parec (keeps connection alive)
+	lLevel, rLevel, running := getVULevels()
+	res.Running = running
+	res.StreamCount = 0
+	if running {
+		res.StreamCount = 1
 	}
 
 	// Get volume of the default/active sink
