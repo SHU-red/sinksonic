@@ -1352,10 +1352,13 @@ func initVUParec() {
 		"--raw",
 		"--latency=1",
 	)
-	vuParecCmd.Env = append(os.Environ(),
-		"PULSE_SERVER=unix:"+os.Getenv("XDG_RUNTIME_DIR")+"/pulse/native",
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	vuParecCmd.Env = []string{
+		"PULSE_SERVER=unix:" + runtimeDir + "/pulse/native",
 		"PULSE_PROP_media.name=sinksonic-vu-meter",
-	)
+		"HOME=" + os.Getenv("HOME"),
+		"USER=" + os.Getenv("USER"),
+	}
 
 	var err error
 	vuParecOut, err = vuParecCmd.StdoutPipe()
