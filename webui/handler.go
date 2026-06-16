@@ -1330,9 +1330,16 @@ type LevelsResponse struct {
 	StreamCount int     `json:"stream_count"`
 }
 
+// alsaIsRunning checks if the ALSA PCM device is in RUNNING state.
+func alsaIsRunning(card int, sub int) bool {
+	path := fmt.Sprintf("/proc/asound/card%d/pcm%dp/sub%d/status", card, sub, sub)
+	content, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(content), "state: RUNNING")
+}
+
 // alsaHwActivity reads the ALSA hardware pointer change rate as a proxy
 // for audio activity. Does NOT touch pipewire/pulse — pure procfs reads.
-func alsaHwActivity(card int, sub int) (float64, float64, bool) {
+func alsaHwActivity(card int, sub int) (float64, float64) {
 	path := fmt.Sprintf("/proc/asound/card%d/pcm%dp/sub%d/status", card, sub, sub)
 	const sampleRate = 48000.0
 
@@ -1356,7 +1363,7 @@ func alsaHwActivity(card int, sub int) (float64, float64, bool) {
 
 	h1, ok1 := readHwPtr()
 	if !ok1 {
-		return 0, 0, false
+		return 0, 0
 	}
 
 	// Wait ~50ms for hw_ptr to advance
@@ -1364,7 +1371,7 @@ func alsaHwActivity(card int, sub int) (float64, float64, bool) {
 
 	h2, ok2 := readHwPtr()
 	if !ok2 {
-		return 0, 0, false
+		return 0, 0
 	}
 
 	delta := h2 - h1
@@ -1383,7 +1390,7 @@ func alsaHwActivity(card int, sub int) (float64, float64, bool) {
 		activity = 0
 	}
 
-	return activity, activity, activity > 2
+	return activity, activity
 }
 
 func apiLevels(w http.ResponseWriter, r *http.Request) {
@@ -1394,48 +1401,34 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 
 	res := LevelsResponse{
 		Levels: make([]int, 32),
+		Channels: 2,
 	}
 
-	// Get stream count and running state from pw-dump (fast because cached or short)
-	pwOut, _ := runCmd(3*time.Second, "pw-dump")
-	streamCount := 0
-	running := false
-	if pwOut != "" {
-		var objects []struct {
-			Info *struct {
-				Props map[string]interface{} `json:"props"`
-			} `json:"info"`
-		}
-		if err := json.Unmarshal([]byte(pwOut), &objects); err == nil {
-			for _, obj := range objects {
-				if obj.Info != nil && obj.Info.Props != nil {
-					cls, _ := obj.Info.Props["media.class"].(string)
-					if strings.Contains(cls, "Stream/Output/Audio") {
-						streamCount++
-						if corked, ok := obj.Info.Props["pulse.corked"].(bool); ok && !corked {
-							running = true
-						}
-					}
-				}
-			}
-		}
-	}
+	// Get real audio activity directly from ALSA (zero pipewire/pulse interaction)
+	// Card 1 = Headphones on Pi 3B, Card 0 = HDMI
+	alsaActive := alsaIsRunning(1, 0) || alsaIsRunning(0, 0)
 
-	res.Running = running
-	res.StreamCount = streamCount
-
-	// Get real audio activity from ALSA hardware pointer delta
-	// Card 1 = Headphones on Pi 3B, sub 0 = first stream
-	// This is fast, zero-invasiveness procfs reads — no pipewire/pulse involvement
 	lLevel := 0.0
 	rLevel := 0.0
-	if running && streamCount > 0 {
-		lLevel, rLevel, _ = alsaHwActivity(1, 0)
-		// If headphones card shows nothing, try HDMI (card 0)
+	if alsaActive {
+		// Try headphones first, then HDMI
+		lLevel, rLevel = alsaHwActivity(1, 0)
 		if lLevel < 1 {
-			lLevel, rLevel, _ = alsaHwActivity(0, 0)
+			lLevel, rLevel = alsaHwActivity(0, 0)
 		}
-		// Volume is already handled separately — don't re-scale here
+	}
+
+	res.Running = alsaActive
+	res.StreamCount = 0 // not critical for VU display
+
+	// Get stream count from a quick pw-dump check (runs every 3rd poll at most)
+	if alsaActive {
+		pwOut, _ := runCmd(2*time.Second, "pw-dump")
+		if pwOut != "" {
+			if strings.Contains(pwOut, "Stream/Output/Audio") {
+				res.StreamCount = strings.Count(pwOut, "Stream/Output/Audio")
+			}
+		}
 	}
 
 	// Get volume of the default/active sink
