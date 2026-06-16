@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -1332,92 +1331,31 @@ type LevelsResponse struct {
 }
 
 // vuParec is a persistent parec process that captures monitor audio
-// vuCache stores the last captured levels so we don't respawn parec
-// on every request. Cache is valid for 2 seconds.
-var vuMu sync.Mutex
-var vuCachedL, vuCachedR float64
-var vuCachedRunning bool
-var vuCachedAt time.Time
-
+// getVULevels returns audio activity from stream state (no subprocesses).
+// Pure visual — reads streams from pw-dump once, no parec involvement.
 func getVULevels() (float64, float64, bool) {
-	vuMu.Lock()
-	defer vuMu.Unlock()
-
-	// Return cache if fresh enough
-	if time.Since(vuCachedAt) < 3*time.Second {
-		return vuCachedL, vuCachedR, vuCachedRunning
-	}
-
-	// Capture: tiny synchronous parec run (200ms, 8kHz, ~1600 bytes)
-	monitor := "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
-
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	cmd := exec.CommandContext(ctx, "parec",
-		"--device="+monitor,
-		"--rate=8000",
-		"--channels=2",
-		"--format=s16le",
-		"--raw",
-		"--latency=1",
-	)
-	cmd.Env = []string{
-		"PULSE_SERVER=unix:" + runtimeDir + "/pulse/native",
-		"HOME=" + os.Getenv("HOME"),
-		"USER=" + os.Getenv("USER"),
-	}
-
-	out, err := cmd.CombinedOutput()
-	// Context deadline errors are expected — parec gets killed by timeout
-	// but may have produced valid audio data before that
-	if len(out) < 16 && err != nil {
-		vuCachedL = 0
-		vuCachedR = 0
-		vuCachedRunning = false
-		vuCachedAt = time.Now()
+	pwOut, err := runCmd(3*time.Second, "pw-dump")
+	if err != nil || pwOut == "" {
 		return 0, 0, false
 	}
-	// Even with partial data (killed by timeout), use what we got
-	if len(out) < 16 {
-		vuCachedL = 0
-		vuCachedR = 0
-		vuCachedRunning = false
-		vuCachedAt = time.Now()
-		return 0, 0, false
+	active := false
+	hasStream := false
+	if strings.Contains(pwOut, "Stream/Output/Audio") {
+		hasStream = true
+		// Check if any stream is uncorked (playing)
+		for _, line := range strings.Split(pwOut, "\n") {
+			if strings.Contains(line, "pulse.corked") {
+				if strings.Contains(line, "false") {
+					active = true
+					break
+				}
+			}
+		}
 	}
-
-	// Use all available samples for RMS
-	numSamples := len(out) / 4
-	if numSamples > 500 {
-		numSamples = 500
+	if hasStream && active {
+		return 50, 50, true
 	}
-	var sumL, sumR int64
-	for i := 0; i < numSamples; i++ {
-		off := i * 4
-		s := int16(int(out[off]) | int(out[off+1])<<8)
-		sumL += int64(s) * int64(s)
-		s = int16(int(out[off+2]) | int(out[off+3])<<8)
-		sumR += int64(s) * int64(s)
-	}
-
-	rmsL := float64(sumL) / float64(numSamples)
-	rmsR := float64(sumR) / float64(numSamples)
-
-	// Scale RMS to 0-100
-	vuCachedL = (1 - 1/(rmsL/500+1)) * 100
-	vuCachedR = (1 - 1/(rmsR/500+1)) * 100
-	if vuCachedL > 100 {
-		vuCachedL = 100
-	}
-	if vuCachedR > 100 {
-		vuCachedR = 100
-	}
-	vuCachedRunning = vuCachedL > 1 || vuCachedR > 1
-	vuCachedAt = time.Now()
-
-	return vuCachedL, vuCachedR, vuCachedRunning
+	return 0, 0, false
 }
 
 func apiLevels(w http.ResponseWriter, r *http.Request) {

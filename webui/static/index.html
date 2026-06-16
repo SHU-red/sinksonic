@@ -213,6 +213,68 @@
       background: linear-gradient(to top, #ff0000, #ff4444) !important;
       box-shadow: 0 0 6px rgba(255,0,0,0.5);
     }
+
+    /* VU animation when active — pure CSS, no JS computation */
+    @keyframes vu-dance-0 { 0%,100% { height: 8% } 50% { height: 95% } }
+    @keyframes vu-dance-1 { 0%,100% { height: 15% } 33% { height: 80% } 66% { height: 45% } }
+    @keyframes vu-dance-2 { 0%,100% { height: 5% } 25% { height: 70% } 75% { height: 30% } }
+    @keyframes vu-dance-3 { 0%,100% { height: 20% } 50% { height: 60% } }
+    @keyframes vu-dance-4 { 0%,100% { height: 10% } 30% { height: 85% } 70% { height: 35% } }
+    @keyframes vu-dance-5 { 0%,100% { height: 25% } 50% { height: 75% } }
+    @keyframes vu-dance-6 { 0%,100% { height: 12% } 40% { height: 90% } }
+    @keyframes vu-dance-7 { 0%,100% { height: 18% } 60% { height: 65% } }
+    @keyframes vu-dance-8 { 0%,100% { height: 8% } 20% { height: 78% } 80% { height: 40% } }
+    @keyframes vu-dance-9 { 0%,100% { height: 22% } 50% { height: 55% } }
+    @keyframes vu-dance-10 { 0%,100% { height: 5% } 35% { height: 88% } }
+    @keyframes vu-dance-11 { 0%,100% { height: 15% } 45% { height: 50% } }
+    @keyframes vu-dance-12 { 0%,100% { height: 10% } 25% { height: 82% } }
+    @keyframes vu-dance-13 { 0%,100% { height: 20% } 55% { height: 45% } }
+    @keyframes vu-dance-14 { 0%,100% { height: 8% } 30% { height: 92% } 70% { height: 60% } }
+    @keyframes vu-dance-15 { 0%,100% { height: 12% } 50% { height: 70% } }
+
+    .vu-active .eq-bar {
+      animation-duration: 1.2s;
+      animation-iteration-count: infinite;
+      animation-timing-function: ease-in-out;
+    }
+    .vu-active .eq-bar.band-0 { animation-name: vu-dance-0; animation-delay: 0s; }
+    .vu-active .eq-bar.band-1 { animation-name: vu-dance-1; animation-delay: -0.1s; }
+    .vu-active .eq-bar.band-2 { animation-name: vu-dance-2; animation-delay: -0.2s; }
+    .vu-active .eq-bar.band-3 { animation-name: vu-dance-3; animation-delay: -0.3s; }
+    .vu-active .eq-bar.band-4 { animation-name: vu-dance-4; animation-delay: -0.15s; }
+    .vu-active .eq-bar.band-5 { animation-name: vu-dance-5; animation-delay: -0.4s; }
+    .vu-active .eq-bar.band-6 { animation-name: vu-dance-6; animation-delay: -0.05s; }
+    .vu-active .eq-bar.band-7 { animation-name: vu-dance-7; animation-delay: -0.35s; }
+    .vu-active .eq-bar.band-8 { animation-name: vu-dance-8; animation-delay: -0.25s; }
+    .vu-active .eq-bar.band-9 { animation-name: vu-dance-9; animation-delay: -0.45s; }
+    .vu-active .eq-bar.band-10 { animation-name: vu-dance-10; animation-delay: -0.12s; }
+    .vu-active .eq-bar.band-11 { animation-name: vu-dance-11; animation-delay: -0.3s; }
+    .vu-active .eq-bar.band-12 { animation-name: vu-dance-12; animation-delay: -0.08s; }
+    .vu-active .eq-bar.band-13 { animation-name: vu-dance-13; animation-delay: -0.38s; }
+    .vu-active .eq-bar.band-14 { animation-name: vu-dance-14; animation-delay: -0.2s; }
+    .vu-active .eq-bar.band-15 { animation-name: vu-dance-15; animation-delay: -0.5s; }
+    /* Right channel mirrors left */
+    .vu-active .eq-bar.band-16 { animation-name: vu-dance-0; animation-delay: -0.05s; }
+    .vu-active .eq-bar.band-17 { animation-name: vu-dance-1; animation-delay: -0.15s; }
+    .vu-active .eq-bar.band-18 { animation-name: vu-dance-2; animation-delay: -0.25s; }
+    .vu-active .eq-bar.band-19 { animation-name: vu-dance-3; animation-delay: -0.35s; }
+    .vu-active .eq-bar.band-20 { animation-name: vu-dance-4; animation-delay: -0.1s; }
+    .vu-active .eq-bar.band-21 { animation-name: vu-dance-5; animation-delay: -0.45s; }
+    .vu-active .eq-bar.band-22 { animation-name: vu-dance-6; animation-delay: -0.02s; }
+    .vu-active .eq-bar.band-23 { animation-name: vu-dance-7; animation-delay: -0.3s; }
+    .vu-active .eq-bar.band-24 { animation-name: vu-dance-8; animation-delay: -0.2s; }
+    .vu-active .eq-bar.band-25 { animation-name: vu-dance-9; animation-delay: -0.48s; }
+    .vu-active .eq-bar.band-26 { animation-name: vu-dance-10; animation-delay: -0.08s; }
+    .vu-active .eq-bar.band-27 { animation-name: vu-dance-11; animation-delay: -0.35s; }
+    .vu-active .eq-bar.band-28 { animation-name: vu-dance-12; animation-delay: -0.15s; }
+    .vu-active .eq-bar.band-29 { animation-name: vu-dance-13; animation-delay: -0.4s; }
+    .vu-active .eq-bar.band-30 { animation-name: vu-dance-14; animation-delay: -0.25s; }
+    .vu-active .eq-bar.band-31 { animation-name: vu-dance-15; animation-delay: -0.45s; }
+
+    .vu-idle .eq-bar {
+      height: 2% !important;
+      animation: none !important;
+    }
     .refresh { font-size: 0.75rem; color: var(--text2); }
     .footer {
       text-align: center;
@@ -368,8 +430,32 @@
         <span id="vu-status" style="font-size:0.7rem">&#9679; idle</span>
       </div>
     </div>
-    <div style="display:flex;gap:3px;align-items:flex-end;height:80px" id="level-bars"></div>
-    <div style="display:flex;gap:3px;margin-top:2px;font-size:0.5rem;color:var(--text2);text-align:center;height:10px" id="vu-labels"></div>
+    <div style="display:flex;gap:3px;align-items:flex-end;height:80px" id="level-bars" class="vu-idle">
+      <div class="eq-bar band-0" style="height:2%"></div><div class="eq-bar band-1" style="height:2%"></div>
+      <div class="eq-bar band-2" style="height:2%"></div><div class="eq-bar band-3" style="height:2%"></div>
+      <div class="eq-bar band-4" style="height:2%"></div><div class="eq-bar band-5" style="height:2%"></div>
+      <div class="eq-bar band-6" style="height:2%"></div><div class="eq-bar band-7" style="height:2%"></div>
+      <div class="eq-bar band-8" style="height:2%"></div><div class="eq-bar band-9" style="height:2%"></div>
+      <div class="eq-bar band-10" style="height:2%"></div><div class="eq-bar band-11" style="height:2%"></div>
+      <div class="eq-bar band-12" style="height:2%"></div><div class="eq-bar band-13" style="height:2%"></div>
+      <div class="eq-bar band-14" style="height:2%"></div><div class="eq-bar band-15" style="height:2%"></div>
+      <div class="eq-bar band-16" style="height:2%"></div><div class="eq-bar band-17" style="height:2%"></div>
+      <div class="eq-bar band-18" style="height:2%"></div><div class="eq-bar band-19" style="height:2%"></div>
+      <div class="eq-bar band-20" style="height:2%"></div><div class="eq-bar band-21" style="height:2%"></div>
+      <div class="eq-bar band-22" style="height:2%"></div><div class="eq-bar band-23" style="height:2%"></div>
+      <div class="eq-bar band-24" style="height:2%"></div><div class="eq-bar band-25" style="height:2%"></div>
+      <div class="eq-bar band-26" style="height:2%"></div><div class="eq-bar band-27" style="height:2%"></div>
+      <div class="eq-bar band-28" style="height:2%"></div><div class="eq-bar band-29" style="height:2%"></div>
+      <div class="eq-bar band-30" style="height:2%"></div><div class="eq-bar band-31" style="height:2%"></div>
+    </div>
+    <div style="display:flex;gap:3px;margin-top:2px;font-size:0.5rem;color:var(--text2);text-align:center;height:10px" id="vu-labels">
+      <div style="flex:1;min-width:0">32</div><div style="flex:1;min-width:0">64</div><div style="flex:1;min-width:0">125</div>
+      <div style="flex:1;min-width:0">250</div><div style="flex:1;min-width:0">500</div><div style="flex:1;min-width:0">1k</div>
+      <div style="flex:1;min-width:0">2k</div><div style="flex:1;min-width:0">4k</div><div style="flex:1;min-width:0">8k</div>
+      <div style="flex:1;min-width:0">16k</div><div style="flex:1;min-width:0">32</div><div style="flex:1;min-width:0">64</div>
+      <div style="flex:1;min-width:0">125</div><div style="flex:1;min-width:0">250</div><div style="flex:1;min-width:0">500</div>
+      <div style="flex:1;min-width:0">1k</div>
+    </div>
   </div>
 
   <div class="card" style="margin-bottom: 1.5rem;">
@@ -566,114 +652,29 @@
         'Updated ' + new Date().toLocaleTimeString();
     }
 
-    // VU state: real audio levels from parec backend
-    let vuBars = [];
-    let vuRunning = false;
-    let vuRealLevels = new Array(32).fill(1);
-    let vuDisplayLevels = new Array(32).fill(1);
-    let vuPeak = 1;
-    let vuAnimId = null;
-
-    function initVUBars() {
-      const container = document.getElementById('level-bars');
-      const labels = document.getElementById('vu-labels');
-      container.innerHTML = '';
-      labels.innerHTML = '';
-      const freqLabels = ['32','64','125','250','500','1k','2k','4k','8k','16k','32','64','125','250','500','1k','2k','4k','8k','16k','32','64','125','250','500','1k','2k','4k','8k','16k'];
-      for (let i = 0; i < 32; i++) {
-        const bar = document.createElement('div');
-        bar.className = 'eq-bar band-' + (i % 16);
-        bar.style.height = '1px';
-        container.appendChild(bar);
-        vuBars.push(bar);
-        // Labels for first 16 bars
-        if (i < 16) {
-          const lbl = document.createElement('div');
-          lbl.style.flex = '1';
-          lbl.style.minWidth = '0';
-          lbl.textContent = freqLabels[i];
-          labels.appendChild(lbl);
-        }
-      }
-      vuAnimId = requestAnimationFrame(animateVUBars);
-    }
-
-    function animateVUBars(timestamp) {
-      let peakVal = 1;
-      let maxL = 1, maxR = 1;
-
-      for (let i = 0; i < 32; i++) {
-        const target = vuRealLevels[i] || 1;
-
-        // Smooth interpolation with faster attack
-        const current = parseFloat(vuBars[i].style.height) || 1;
-        let next;
-        if (target > current) {
-          next = current + (target - current) * 0.55; // faster attack
-        } else {
-          next = current - (current - target) * 0.15;  // faster decay
-        }
-        next = Math.max(1, Math.min(100, next));
-
-        vuBars[i].style.height = next + '%';
-        vuBars[i].className = 'eq-bar band-' + (i % 16);
-        if (next > 85) vuBars[i].classList.add('clipping');
-        else if (next > 65) vuBars[i].classList.add('warning');
-
-        if (next > peakVal) peakVal = next;
-        vuDisplayLevels[i] = next;
-        if (i < 16 && next > maxL) maxL = next;
-        if (i >= 16 && next > maxR) maxR = next;
-      }
-
-      // Peak hold
-      if (peakVal > vuPeak) vuPeak = peakVal;
-      vuPeak = vuPeak * 0.96;
-      if (vuPeak < 1) vuPeak = 1;
-      document.getElementById('vu-peak').textContent = vuRunning
-        ? 'PEAK ' + Math.round(vuPeak) + '%'
-        : 'PEAK --';
-
-      const statusEl = document.getElementById('vu-status');
-      statusEl.textContent = vuRunning ? '\u25cf' : '\u25cb';
-      statusEl.style.color = vuRunning ? 'var(--green)' : 'var(--text2)';
-
-      // Channel dB from peak per channel
-      const lDb = vuRunning ? Math.round(maxL * 0.4 - 40) : null;
-      const rDb = vuRunning ? Math.round(maxR * 0.4 - 40) : null;
-      document.getElementById('vu-channel-l').textContent =
-        'L: ' + (lDb !== null ? (lDb < -40 ? '-inf' : lDb + 'dB') : '-inf');
-      document.getElementById('vu-channel-r').textContent =
-        'R: ' + (rDb !== null ? (rDb < -40 ? '-inf' : rDb + 'dB') : '-inf');
-
-      vuAnimId = requestAnimationFrame(animateVUBars);
-    }
-
-    // Poll real levels from backend (fits inside parec capture time)
+    // VU: pure CSS animations - zero JS per-frame computation
     async function updateVUMeter() {
       try {
         const data = await fetchJSON('/levels');
-        if (data) {
-          vuRunning = data.running;
-          if (data.levels && data.levels.length === 32) {
-            for (let i = 0; i < 32; i++) {
-              vuRealLevels[i] = data.levels[i] || 1;
-            }
+        const running = data && data.running;
+        const container = document.getElementById('level-bars');
+        container.className = running ? 'vu-active' : 'vu-idle';
+        document.getElementById('vu-peak').textContent = running ? 'PEAK --' : 'PEAK --';
+        const statusEl = document.getElementById('vu-status');
+        statusEl.textContent = running ? '\u25cf' : '\u25cb';
+        statusEl.style.color = running ? 'var(--green)' : 'var(--text2)';
+        // Channel dB
+        document.getElementById('vu-channel-l').textContent = running ? 'L: act' : 'L: --';
+        document.getElementById('vu-channel-r').textContent = running ? 'R: act' : 'R: --';
+        // Sync master volume slider
+        if (data && data.volume > 0) {
+          const slider = document.getElementById('master-volume');
+          if (slider && parseInt(slider.value) !== data.volume) {
+            slider.value = data.volume;
+            document.getElementById('master-volume-label').textContent = Math.round(data.volume / 2.55) + '%';
           }
-          // Sync master volume slider
-          if (data.volume > 0) {
-            const slider = document.getElementById('master-volume');
-            if (slider && parseInt(slider.value) !== data.volume) {
-              slider.value = data.volume;
-              document.getElementById('master-volume-label').textContent = Math.round(data.volume / 2.55) + '%';
-            }
-          }
-        } else {
-          vuRunning = false;
         }
-      } catch(e) {
-        vuRunning = false;
-      }
+      } catch(e) {}
     }
 
     async function updateMasterVolume(value) {
@@ -1101,7 +1102,6 @@
     }
 
     // Init
-    initVUBars();
     update();
     loadAudioSettings();
     loadSinks();
