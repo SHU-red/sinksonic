@@ -1351,7 +1351,7 @@ func getVULevels() (float64, float64, bool) {
 	// Capture: tiny synchronous parec run (200ms, 8kHz, ~1600 bytes)
 	monitor := "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
 	defer cancel()
 
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
@@ -1361,6 +1361,7 @@ func getVULevels() (float64, float64, bool) {
 		"--channels=2",
 		"--format=s16le",
 		"--raw",
+		"--latency=1",
 	)
 	cmd.Env = []string{
 		"PULSE_SERVER=unix:" + runtimeDir + "/pulse/native",
