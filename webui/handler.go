@@ -1330,7 +1330,7 @@ type LevelsResponse struct {
 	StreamCount int     `json:"stream_count"`
 }
 
-// captureRMS reads a short PCM sample from the sink's monitor port
+// captureRMS reads a short PCM sample from the sink'''s monitor port
 // and returns per-channel RMS levels (0-100 scale) using parec.
 func captureRMS(sinkName string) (float64, float64) {
 	// Determine monitor source name
@@ -1340,8 +1340,8 @@ func captureRMS(sinkName string) (float64, float64) {
 		monitor = "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
 	}
 
-	// Capture ~400ms of audio at low rate for speed
-	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	// Capture audio at low rate for speed (120 samples/sec = ~3ms for 1 frame)
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "parec",
@@ -1350,10 +1350,18 @@ func captureRMS(sinkName string) (float64, float64) {
 		"--channels=2",
 		"--format=s16le",
 		"--raw",
-		"--latency=2",
 	)
-	out, err := cmd.Output()
-	if err != nil || len(out) < 8 {
+	cmd.Env = append(cmd.Env, "PULSE_SERVER=unix:"+os.Getenv("XDG_RUNTIME_DIR")+"/pulse/native")
+	cmd.Env = append(cmd.Env, "XDG_RUNTIME_DIR="+os.Getenv("XDG_RUNTIME_DIR"))
+	// Combine stdout and stderr for debugging
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("captureRMS(%s): parec error: %v, output: %d bytes", sinkName, err, len(out))
+		if len(out) < 8 {
+			return 0, 0
+		}
+	}
+	if len(out) < 8 {
 		return 0, 0
 	}
 
