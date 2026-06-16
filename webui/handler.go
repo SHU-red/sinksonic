@@ -1370,6 +1370,7 @@ func getVULevels() (float64, float64, bool) {
 	}
 
 	out, err := cmd.CombinedOutput()
+	log.Printf("VU: parec returned %d bytes, err=%v", len(out), err)
 	if err != nil || len(out) < 16 {
 		log.Printf("VU: parec failed (err=%v, bytes=%d, out=%q)", err, len(out), string(out[:min(len(out), 80)]))
 		vuCachedL = 0
