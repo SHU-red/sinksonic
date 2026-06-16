@@ -1330,6 +1330,67 @@ type LevelsResponse struct {
 	StreamCount int     `json:"stream_count"`
 }
 
+// captureRMS reads a short PCM sample from the sink's monitor port
+// and returns per-channel RMS levels (0-100 scale) using parec.
+func captureRMS(sinkName string) (float64, float64) {
+	// Determine monitor source name
+	monitor := sinkName + ".monitor"
+	if sinkName == "" {
+		// Fall back to headphones sink
+		monitor = "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
+	}
+
+	// Capture ~400ms of audio at low rate for speed
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "parec",
+		"--device="+monitor,
+		"--rate=120",
+		"--channels=2",
+		"--format=s16le",
+		"--raw",
+		"--latency=2",
+	)
+	out, err := cmd.Output()
+	if err != nil || len(out) < 8 {
+		return 0, 0
+	}
+
+	// Parse interleaved 16-bit samples: L R L R ...
+	numSamples := len(out) / 4 // 2 channels * 2 bytes each
+	if numSamples > 200 {
+		numSamples = 200
+	}
+
+	var sumL, sumR int64
+	for i := 0; i < numSamples; i++ {
+		off := i * 4
+		// Little-endian 16-bit signed
+		sampleL := int16(int(out[off]) | int(out[off+1])<<8)
+		sampleR := int16(int(out[off+2]) | int(out[off+3])<<8)
+		sumL += int64(sampleL) * int64(sampleL)
+		sumR += int64(sampleR) * int64(sampleR)
+	}
+
+	if numSamples == 0 {
+		return 0, 0
+	}
+
+	// RMS = sqrt(mean(samples^2)), then scale to 0-100 (32767 = max 16-bit)
+	rmsL := float64(sumL) / float64(numSamples)
+	rmsR := float64(sumR) / float64(numSamples)
+	levelL := (float64(1) - float64(1)/(rmsL/100000+1)) * 100
+	levelR := (float64(1) - float64(1)/(rmsR/100000+1)) * 100
+	if levelL > 100 {
+		levelL = 100
+	}
+	if levelR > 100 {
+		levelR = 100
+	}
+	return levelL, levelR
+}
+
 func apiLevels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1340,15 +1401,11 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 		Levels: make([]int, 32),
 	}
 
-	// Check if audio is flowing using ALSA proc status
-	// Card 1 = Headphones on Pi 3B, Card 0 = HDMI
-	// We check both
-	alsaLines, _ := runCmd(1*time.Second, "sh", "-c", "cat /proc/asound/card*/pcm*/sub*/status 2>/dev/null | head -10")
-	running := strings.Contains(alsaLines, "state: RUNNING")
-
-	// Also check PulseAudio corked state from pw-dump
+	// Get stream count and running state from pw-dump (fast because cached or short)
 	pwOut, _ := runCmd(3*time.Second, "pw-dump")
 	streamCount := 0
+	running := false
+	activeSinkName := ""
 	if pwOut != "" {
 		var objects []struct {
 			Info *struct {
@@ -1358,7 +1415,15 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal([]byte(pwOut), &objects); err == nil {
 			for _, obj := range objects {
 				if obj.Info != nil && obj.Info.Props != nil {
-					if cls, _ := obj.Info.Props["media.class"].(string); strings.Contains(cls, "Stream/Output/Audio") {
+					cls, _ := obj.Info.Props["media.class"].(string)
+					if cls == "Audio/Sink" {
+						// Track the active sink name
+						if n, ok := obj.Info.Props["node.name"].(string); ok {
+							// Use it if it matches our default or is active
+							activeSinkName = n
+						}
+					}
+					if strings.Contains(cls, "Stream/Output/Audio") {
 						streamCount++
 						if corked, ok := obj.Info.Props["pulse.corked"].(bool); ok && !corked {
 							running = true
@@ -1372,62 +1437,68 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 	res.Running = running
 	res.StreamCount = streamCount
 
+	// Get actual audio levels from PCM monitor capture
+	lLevel := 0.0
+	rLevel := 0.0
+	if running && streamCount > 0 {
+		// Find the active sink name from config
+		cfg := loadAppConfig()
+		sinkName := cfg.Audio.DefaultSink
+		if sinkName == "" {
+			sinkName = activeSinkName
+		}
+		lLevel, rLevel = captureRMS(sinkName)
+	}
+
 	// Get volume of the default/active sink
+	vol := 255
 	sinkID := getDefaultSinkID()
 	if sinkID != "" {
 		volOut, volErr := runCmd(2*time.Second, "wpctl", "get-volume", sinkID)
 		if volErr == nil {
 			volParts := strings.Fields(volOut)
 			if len(volParts) >= 2 {
-				v := parseFloat(volParts[1], 0.5)
-				res.Volume = int(v * 255)
-				if res.Volume > 255 {
-					res.Volume = 255
+				v := parseFloat(volParts[1], 1.0)
+				vol = int(v * 255)
+				if vol > 255 {
+					vol = 255
+				}
+				if vol < 0 {
+					vol = 0
 				}
 			}
 		}
 	}
+	res.Volume = vol
 
-	// Generate VU levels based on audio activity
-	// When running: animate bars using volume as intensity + channel variation
-	if running {
-		basePct := res.Volume * 100 / 255
-		if basePct < 5 {
-			basePct = 5
+	// Scale levels by master volume
+	volScale := float64(vol) / 255.0
+	lLevel *= volScale
+	rLevel *= volScale
+
+	// Map to 32 bars with frequency-appropriate falloff
+	// Bars 0-15 = left channel, 16-31 = right channel
+	for i := 0; i < 32; i++ {
+		var chLevel float64
+		if i < 16 {
+			chLevel = lLevel
+		} else {
+			chLevel = rLevel
 		}
-		// Distribute across 32 bars with emphasis on lower frequencies
-		for i := 0; i < 32; i++ {
-			// Bar height falls off toward higher frequencies
-			falloff := 1.0 - float64(i)/40.0
-			if falloff < 0.15 {
-				falloff = 0.15
-			}
-			pct := int(float64(basePct) * falloff)
-			if pct < 2 {
-				pct = 2
-			}
-			if pct > 100 {
-				pct = 100
-			}
-			res.Levels[i] = pct
+		// Apply frequency falloff: lower bars (bass) stronger
+		barPos := i % 16
+		falloff := 1.0 - float64(barPos)/20.0
+		if falloff < 0.15 {
+			falloff = 0.15
 		}
-		// Add subtle stereo variation for channel 0 vs 1
-		// Even-indexed bars (left channel) and odd-indexed (right channel) vary
-		for i := 0; i < 32; i += 2 {
-			res.Levels[i] = res.Levels[i] * 90 / 100
-			if res.Levels[i] < 1 {
-				res.Levels[i] = 1
-			}
+		pct := int(chLevel * falloff)
+		if pct < 1 {
+			pct = 1
 		}
-	} else {
-		// No audio — minimal bars showing idle
-		for i := 0; i < 32; i++ {
-			res.Levels[i] = 1
+		if pct > 100 {
+			pct = 100
 		}
-	}
-	// Bar 0 always shows activity if running
-	if running && res.Levels[0] < 10 {
-		res.Levels[0] = 10
+		res.Levels[i] = pct
 	}
 
 	res.Channels = 2
