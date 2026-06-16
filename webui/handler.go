@@ -1330,73 +1330,60 @@ type LevelsResponse struct {
 	StreamCount int     `json:"stream_count"`
 }
 
-// captureRMS reads a short PCM sample from the sink'''s monitor port
-// and returns per-channel RMS levels (0-100 scale) using parec.
-func captureRMS(sinkName string) (float64, float64) {
-	// Determine monitor source name
-	monitor := sinkName + ".monitor"
-	if sinkName == "" {
-		// Fall back to headphones sink
-		monitor = "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
-	}
+// alsaHwActivity reads the ALSA hardware pointer change rate as a proxy
+// for audio activity. Does NOT touch pipewire/pulse — pure procfs reads.
+func alsaHwActivity(card int, sub int) (float64, float64, bool) {
+	path := fmt.Sprintf("/proc/asound/card%d/pcm%dp/sub%d/status", card, sub, sub)
+	const sampleRate = 48000.0
 
-	// Capture audio at low rate for speed (120 samples/sec = ~3ms for 1 frame)
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "parec",
-		"--device="+monitor,
-		"--rate=120",
-		"--channels=2",
-		"--format=s16le",
-		"--raw",
-	)
-	cmd.Env = append(cmd.Env, "PULSE_SERVER=unix:"+os.Getenv("XDG_RUNTIME_DIR")+"/pulse/native")
-	cmd.Env = append(cmd.Env, "XDG_RUNTIME_DIR="+os.Getenv("XDG_RUNTIME_DIR"))
-	// Combine stdout and stderr for debugging
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("captureRMS(%s): parec error: %v, output: %d bytes", sinkName, err, len(out))
-		if len(out) < 8 {
-			return 0, 0
+	readHwPtr := func() (int64, bool) {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return 0, false
 		}
-	}
-	if len(out) < 8 {
-		return 0, 0
-	}
-
-	// Parse interleaved 16-bit samples: L R L R ...
-	numSamples := len(out) / 4 // 2 channels * 2 bytes each
-	if numSamples > 200 {
-		numSamples = 200
-	}
-
-	var sumL, sumR int64
-	for i := 0; i < numSamples; i++ {
-		off := i * 4
-		// Little-endian 16-bit signed
-		sampleL := int16(int(out[off]) | int(out[off+1])<<8)
-		sampleR := int16(int(out[off+2]) | int(out[off+3])<<8)
-		sumL += int64(sampleL) * int64(sampleL)
-		sumR += int64(sampleR) * int64(sampleR)
+		for _, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "hw_ptr") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					hp, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+					return hp, err == nil
+				}
+			}
+		}
+		return 0, false
 	}
 
-	if numSamples == 0 {
-		return 0, 0
+	h1, ok1 := readHwPtr()
+	if !ok1 {
+		return 0, 0, false
 	}
 
-	// RMS = sqrt(mean(samples^2)), then scale to 0-100 (32767 = max 16-bit)
-	rmsL := float64(sumL) / float64(numSamples)
-	rmsR := float64(sumR) / float64(numSamples)
-	levelL := (float64(1) - float64(1)/(rmsL/100000+1)) * 100
-	levelR := (float64(1) - float64(1)/(rmsR/100000+1)) * 100
-	if levelL > 100 {
-		levelL = 100
+	// Wait ~50ms for hw_ptr to advance
+	time.Sleep(50 * time.Millisecond)
+
+	h2, ok2 := readHwPtr()
+	if !ok2 {
+		return 0, 0, false
 	}
-	if levelR > 100 {
-		levelR = 100
+
+	delta := h2 - h1
+	if delta < 0 {
+		// Wraparound
+		delta += 1 << 32
 	}
-	return levelL, levelR
+
+	// At 48kHz, 50ms = 2400 samples per channel at full activity
+	expectedMax := sampleRate * 0.05 // ~2400
+	activity := float64(delta) / expectedMax * 100
+	if activity > 100 {
+		activity = 100
+	}
+	if activity < 1 {
+		activity = 0
+	}
+
+	return activity, activity, activity > 2
 }
 
 func apiLevels(w http.ResponseWriter, r *http.Request) {
@@ -1413,7 +1400,6 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 	pwOut, _ := runCmd(3*time.Second, "pw-dump")
 	streamCount := 0
 	running := false
-	activeSinkName := ""
 	if pwOut != "" {
 		var objects []struct {
 			Info *struct {
@@ -1424,13 +1410,6 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 			for _, obj := range objects {
 				if obj.Info != nil && obj.Info.Props != nil {
 					cls, _ := obj.Info.Props["media.class"].(string)
-					if cls == "Audio/Sink" {
-						// Track the active sink name
-						if n, ok := obj.Info.Props["node.name"].(string); ok {
-							// Use it if it matches our default or is active
-							activeSinkName = n
-						}
-					}
 					if strings.Contains(cls, "Stream/Output/Audio") {
 						streamCount++
 						if corked, ok := obj.Info.Props["pulse.corked"].(bool); ok && !corked {
@@ -1445,17 +1424,18 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 	res.Running = running
 	res.StreamCount = streamCount
 
-	// Get actual audio levels from PCM monitor capture
+	// Get real audio activity from ALSA hardware pointer delta
+	// Card 1 = Headphones on Pi 3B, sub 0 = first stream
+	// This is fast, zero-invasiveness procfs reads — no pipewire/pulse involvement
 	lLevel := 0.0
 	rLevel := 0.0
 	if running && streamCount > 0 {
-		// Find the active sink name from config
-		cfg := loadAppConfig()
-		sinkName := cfg.Audio.DefaultSink
-		if sinkName == "" {
-			sinkName = activeSinkName
+		lLevel, rLevel, _ = alsaHwActivity(1, 0)
+		// If headphones card shows nothing, try HDMI (card 0)
+		if lLevel < 1 {
+			lLevel, rLevel, _ = alsaHwActivity(0, 0)
 		}
-		lLevel, rLevel = captureRMS(sinkName)
+		// Volume is already handled separately — don't re-scale here
 	}
 
 	// Get volume of the default/active sink
