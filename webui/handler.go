@@ -1344,14 +1344,14 @@ func getVULevels() (float64, float64, bool) {
 	defer vuMu.Unlock()
 
 	// Return cache if fresh enough
-	if time.Since(vuCachedAt) < 2*time.Second {
+	if time.Since(vuCachedAt) < 3*time.Second {
 		return vuCachedL, vuCachedR, vuCachedRunning
 	}
 
 	// Capture: tiny synchronous parec run (200ms, 8kHz, ~1600 bytes)
 	monitor := "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
@@ -1370,9 +1370,17 @@ func getVULevels() (float64, float64, bool) {
 	}
 
 	out, err := cmd.CombinedOutput()
-	log.Printf("VU: parec returned %d bytes, err=%v", len(out), err)
-	if err != nil || len(out) < 16 {
-		log.Printf("VU: parec failed (err=%v, bytes=%d, out=%q)", err, len(out), string(out[:min(len(out), 80)]))
+	// Context deadline errors are expected — parec gets killed by timeout
+	// but may have produced valid audio data before that
+	if len(out) < 16 && err != nil {
+		vuCachedL = 0
+		vuCachedR = 0
+		vuCachedRunning = false
+		vuCachedAt = time.Now()
+		return 0, 0, false
+	}
+	// Even with partial data (killed by timeout), use what we got
+	if len(out) < 16 {
 		vuCachedL = 0
 		vuCachedR = 0
 		vuCachedRunning = false
