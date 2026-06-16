@@ -161,8 +161,6 @@ func init() {
 	}
 	// Apply default sink from config on startup
 	applyDefaultSinkFromConfig()
-	// Start persistent VU meter (parec stays connected, no reconnect churn)
-	initVUParec()
 }
 
 // applyDefaultSinkFromConfig reads the config and sets the default sink if configured.
@@ -1334,107 +1332,81 @@ type LevelsResponse struct {
 }
 
 // vuParec is a persistent parec process that captures monitor audio
-// and provides real RMS levels without reconnect churn.
-var vuParecCmd *exec.Cmd
-var vuParecOut io.ReadCloser
+// vuCache stores the last captured levels so we don't respawn parec
+// on every request. Cache is valid for 2 seconds.
 var vuMu sync.Mutex
-var vuLastL, vuLastR float64
-var vuLastRunning bool
-
-func initVUParec() {
-	monitor := "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
-
-	vuParecCmd = exec.Command("parec",
-		"--device="+monitor,
-		"--rate=120",
-		"--channels=2",
-		"--format=s16le",
-		"--raw",
-		"--latency=1",
-	)
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	vuParecCmd.Env = []string{
-		"PULSE_SERVER=unix:" + runtimeDir + "/pulse/native",
-		"PULSE_PROP_media.name=sinksonic-vu-meter",
-		"HOME=" + os.Getenv("HOME"),
-		"USER=" + os.Getenv("USER"),
-	}
-
-	var err error
-	vuParecOut, err = vuParecCmd.StdoutPipe()
-	if err != nil {
-		log.Printf("VU parec pipe error: %v", err)
-		return
-	}
-
-	if err := vuParecCmd.Start(); err != nil {
-		log.Printf("VU parec start error: %v", err)
-		vuParecOut = nil
-		return
-	}
-
-	// Read samples in background goroutine
-	go func() {
-		buf := make([]byte, 4096)
-		var readCount int
-		for {
-			n, err := vuParecOut.Read(buf)
-			if err != nil || n < 4 {
-				vuMu.Lock()
-				vuLastRunning = false
-				vuMu.Unlock()
-				readCount = 0
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-			readCount++
-			if readCount <= 3 {
-				log.Printf("VU: got %d bytes (read #%d)", n, readCount)
-			}
-
-			// Compute RMS from available samples
-			numSamples := n / 4
-			if numSamples > 100 {
-				numSamples = 100
-			}
-			var sumL, sumR int64
-			for i := 0; i < numSamples; i++ {
-				off := i * 4
-				s := int16(int(buf[off]) | int(buf[off+1])<<8)
-				sumL += int64(s) * int64(s)
-				s = int16(int(buf[off+2]) | int(buf[off+3])<<8)
-				sumR += int64(s) * int64(s)
-			}
-
-			vuMu.Lock()
-			// Scale RMS to 0-100 using: 1 - 1/(RMS/scale+1)
-			rmsL := float64(sumL) / float64(numSamples)
-			rmsR := float64(sumR) / float64(numSamples)
-			// Scale RMS to 0-100 with better sensitivity
-			// At 120Hz, sine wave at 50% amplitude gives RMS ~2e7
-			// Use: log-like scaling with clamp
-			vuLastL = (1 - 1/(rmsL/500+1)) * 100
-			vuLastR = (1 - 1/(rmsR/500+1)) * 100
-			if readCount <= 10 {
-				log.Printf("VU rms: L=%.0f R=%.0f lvl=%.0f/%.0f", rmsL, rmsR, vuLastL, vuLastR)
-			}
-			if vuLastL > 100 {
-				vuLastL = 100
-			}
-			if vuLastR > 100 {
-				vuLastR = 100
-			}
-			vuLastRunning = vuLastL > 1 || vuLastR > 1
-			vuMu.Unlock()
-		}
-	}()
-	log.Println("VU parec started (persistent monitor capture)")
-}
+var vuCachedL, vuCachedR float64
+var vuCachedRunning bool
+var vuCachedAt time.Time
 
 func getVULevels() (float64, float64, bool) {
 	vuMu.Lock()
 	defer vuMu.Unlock()
-	return vuLastL, vuLastR, vuLastRunning
+
+	// Return cache if fresh enough
+	if time.Since(vuCachedAt) < 2*time.Second {
+		return vuCachedL, vuCachedR, vuCachedRunning
+	}
+
+	// Capture: tiny synchronous parec run (200ms, 8kHz, ~1600 bytes)
+	monitor := "alsa_output.platform-3f00b840.mailbox.2.stereo-fallback.monitor"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	cmd := exec.CommandContext(ctx, "parec",
+		"--device="+monitor,
+		"--rate=8000",
+		"--channels=2",
+		"--format=s16le",
+		"--raw",
+	)
+	cmd.Env = []string{
+		"PULSE_SERVER=unix:" + runtimeDir + "/pulse/native",
+		"HOME=" + os.Getenv("HOME"),
+		"USER=" + os.Getenv("USER"),
+	}
+
+	out, err := cmd.Output()
+	if err != nil || len(out) < 16 {
+		vuCachedL = 0
+		vuCachedR = 0
+		vuCachedRunning = false
+		vuCachedAt = time.Now()
+		return 0, 0, false
+	}
+
+	// Use all available samples for RMS
+	numSamples := len(out) / 4
+	if numSamples > 500 {
+		numSamples = 500
+	}
+	var sumL, sumR int64
+	for i := 0; i < numSamples; i++ {
+		off := i * 4
+		s := int16(int(out[off]) | int(out[off+1])<<8)
+		sumL += int64(s) * int64(s)
+		s = int16(int(out[off+2]) | int(out[off+3])<<8)
+		sumR += int64(s) * int64(s)
+	}
+
+	rmsL := float64(sumL) / float64(numSamples)
+	rmsR := float64(sumR) / float64(numSamples)
+
+	// Scale RMS to 0-100
+	vuCachedL = (1 - 1/(rmsL/500+1)) * 100
+	vuCachedR = (1 - 1/(rmsR/500+1)) * 100
+	if vuCachedL > 100 {
+		vuCachedL = 100
+	}
+	if vuCachedR > 100 {
+		vuCachedR = 100
+	}
+	vuCachedRunning = vuCachedL > 1 || vuCachedR > 1
+	vuCachedAt = time.Now()
+
+	return vuCachedL, vuCachedR, vuCachedRunning
 }
 
 func apiLevels(w http.ResponseWriter, r *http.Request) {

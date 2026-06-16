@@ -609,9 +609,9 @@
         const current = parseFloat(vuBars[i].style.height) || 1;
         let next;
         if (target > current) {
-          next = current + (target - current) * 0.4;
+          next = current + (target - current) * 0.55; // faster attack
         } else {
-          next = current - (current - target) * 0.08;
+          next = current - (current - target) * 0.15;  // faster decay
         }
         next = Math.max(1, Math.min(100, next));
 
@@ -1107,7 +1107,7 @@
     loadSinks();
     loadMasterVolume();
     setInterval(update, 2000);
-    setInterval(updateVUMeter, 1200); // VU: poll real levels from parec capture
+    setInterval(updateVUMeter, 800); // VU: lightweight on-demand parec capture
   </script>
 </body>
 </html>
