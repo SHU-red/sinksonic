@@ -1376,14 +1376,20 @@ func initVUParec() {
 	// Read samples in background goroutine
 	go func() {
 		buf := make([]byte, 4096)
+		var readCount int
 		for {
 			n, err := vuParecOut.Read(buf)
 			if err != nil || n < 4 {
 				vuMu.Lock()
 				vuLastRunning = false
 				vuMu.Unlock()
+				readCount = 0
 				time.Sleep(100 * time.Millisecond)
 				continue
+			}
+			readCount++
+			if readCount <= 3 {
+				log.Printf("VU: got %d bytes (read #%d)", n, readCount)
 			}
 
 			// Compute RMS from available samples
