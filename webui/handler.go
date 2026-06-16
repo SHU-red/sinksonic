@@ -1479,22 +1479,33 @@ func apiLevels(w http.ResponseWriter, r *http.Request) {
 	lLevel *= volScale
 	rLevel *= volScale
 
-	// Map to 32 bars with frequency-appropriate falloff
-	// Bars 0-15 = left channel, 16-31 = right channel
-	for i := 0; i < 32; i++ {
+	// Map to 32 bars with equalizer-curve coefficients per band
+	// Each bar position maps to a frequency band with a unique coefficient
+	// that creates a natural EQ curve look (peaks and valleys like a real EQ)
+	bars := 32
+	eqCoeffs := []float64{
+		// Left channel (bars 0-15): sub-bass to high-mid
+		1.00, 0.85, 0.70, 0.55, // 20-80 Hz: sub-bass roll-off
+		0.65, 0.75, 0.90, 0.95, // 80-250 Hz: bass hump
+		0.85, 0.70, 0.55, 0.50, // 250-800 Hz: low-mid dip  
+		0.60, 0.70, 0.55, 0.45, // 800-4kHz: mid presence
+		// Right channel (bars 16-31): same curve
+		1.00, 0.85, 0.70, 0.55,
+		0.65, 0.75, 0.90, 0.95,
+		0.85, 0.70, 0.55, 0.50,
+		0.60, 0.70, 0.55, 0.45,
+	}
+	if len(eqCoeffs) < bars {
+		bars = len(eqCoeffs)
+	}
+	for i := 0; i < bars; i++ {
 		var chLevel float64
 		if i < 16 {
-			chLevel = lLevel
+			chLevel = lLevel * eqCoeffs[i]
 		} else {
-			chLevel = rLevel
+			chLevel = rLevel * eqCoeffs[i]
 		}
-		// Apply frequency falloff: lower bars (bass) stronger
-		barPos := i % 16
-		falloff := 1.0 - float64(barPos)/20.0
-		if falloff < 0.15 {
-			falloff = 0.15
-		}
-		pct := int(chLevel * falloff)
+		pct := int(chLevel)
 		if pct < 1 {
 			pct = 1
 		}

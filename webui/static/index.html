@@ -186,20 +186,33 @@
       padding: 2rem;
       font-size: 0.875rem;
     }
-    .level-bars {
-      display: flex;
-      gap: 2px;
-      align-items: flex-end;
-    }
-    .level-bar {
+    .eq-bar {
       flex: 1;
-      background: var(--green);
+      min-width: 0;
       border-radius: 2px 2px 0 0;
-      min-height: 2px;
-      transition: background 0.05s;
+      transition: height 0.04s ease-out;
     }
-    .level-bar.warning { background: var(--yellow); }
-    .level-bar.clipping { background: var(--red); }
+    .eq-bar.band-0 { background: linear-gradient(to top, #00b894, #00e6a0); }
+    .eq-bar.band-1 { background: linear-gradient(to top, #00b894, #00e6a0); }
+    .eq-bar.band-2 { background: linear-gradient(to top, #00cec9, #00e6c9); }
+    .eq-bar.band-3 { background: linear-gradient(to top, #00cec9, #00e6c9); }
+    .eq-bar.band-4 { background: linear-gradient(to top, #0984e3, #5dade2); }
+    .eq-bar.band-5 { background: linear-gradient(to top, #0984e3, #5dade2); }
+    .eq-bar.band-6 { background: linear-gradient(to top, #6c5ce7, #a29bfe); }
+    .eq-bar.band-7 { background: linear-gradient(to top, #6c5ce7, #a29bfe); }
+    .eq-bar.band-8 { background: linear-gradient(to top, #a29bfe, #c4baff); }
+    .eq-bar.band-9 { background: linear-gradient(to top, #fd79a8, #ff9cc0); }
+    .eq-bar.band-10 { background: linear-gradient(to top, #e17055, #ff8a6f); }
+    .eq-bar.band-11 { background: linear-gradient(to top, #d63031, #ff5e5e); }
+    .eq-bar.band-12 { background: linear-gradient(to top, #fdcb6e, #ffe08a); }
+    .eq-bar.band-13 { background: linear-gradient(to top, #e17055, #ff8a6f); }
+    .eq-bar.band-14 { background: linear-gradient(to top, #6c5ce7, #a29bfe); }
+    .eq-bar.band-15 { background: linear-gradient(to top, #00b894, #00e6a0); }
+    .eq-bar.warning { opacity: 1; }
+    .eq-bar.clipping { 
+      background: linear-gradient(to top, #ff0000, #ff4444) !important;
+      box-shadow: 0 0 6px rgba(255,0,0,0.5);
+    }
     .refresh { font-size: 0.75rem; color: var(--text2); }
     .footer {
       text-align: center;
@@ -346,20 +359,17 @@
   </div>
 
   <div class="card" style="margin-bottom: 1.5rem;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
       <h2 style="margin:0;display:inline">Output Level</h2>
-      <div style="display:flex;align-items:center;gap:1rem">
-        <span style="font-size:0.65rem;font-family:var(--mono);color:var(--text2)" id="vu-peak">PEAK --</span>
+      <div style="display:flex;align-items:center;gap:1rem;font-size:0.7rem">
+        <span style="color:var(--green)" id="vu-channel-l">L: -inf</span>
+        <span style="color:var(--accent2)" id="vu-channel-r">R: -inf</span>
+        <span style="font-family:var(--mono);color:var(--yellow)" id="vu-peak">PEAK --</span>
         <span id="vu-status" style="font-size:0.7rem">&#9679; idle</span>
       </div>
     </div>
-    <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
-      <div class="level-bars" id="level-bars" style="flex:1;height:60px"></div>
-      <div style="display:flex;flex-direction:column;gap:4px;min-width:55px;font-size:0.7rem;color:var(--text2);text-align:right;font-family:var(--mono)">
-        <span id="vu-channel-l">L: -inf</span>
-        <span id="vu-channel-r">R: -inf</span>
-      </div>
-    </div>
+    <div style="display:flex;gap:3px;align-items:flex-end;height:80px" id="level-bars"></div>
+    <div style="display:flex;gap:3px;margin-top:2px;font-size:0.5rem;color:var(--text2);text-align:center;height:10px" id="vu-labels"></div>
   </div>
 
   <div class="card" style="margin-bottom: 1.5rem;">
@@ -566,57 +576,71 @@
 
     function initVUBars() {
       const container = document.getElementById('level-bars');
+      const labels = document.getElementById('vu-labels');
       container.innerHTML = '';
+      labels.innerHTML = '';
+      const freqLabels = ['32','64','125','250','500','1k','2k','4k','8k','16k','32','64','125','250','500','1k','2k','4k','8k','16k','32','64','125','250','500','1k','2k','4k','8k','16k'];
       for (let i = 0; i < 32; i++) {
         const bar = document.createElement('div');
-        bar.className = 'level-bar';
-        bar.style.height = '1%';
+        bar.className = 'eq-bar band-' + (i % 16);
+        bar.style.height = '1px';
         container.appendChild(bar);
         vuBars.push(bar);
+        // Labels for first 16 bars
+        if (i < 16) {
+          const lbl = document.createElement('div');
+          lbl.style.flex = '1';
+          lbl.style.minWidth = '0';
+          lbl.textContent = freqLabels[i];
+          labels.appendChild(lbl);
+        }
       }
       vuAnimId = requestAnimationFrame(animateVUBars);
     }
 
     function animateVUBars(timestamp) {
       let peakVal = 1;
+      let maxL = 1, maxR = 1;
 
       for (let i = 0; i < 32; i++) {
         const target = vuRealLevels[i] || 1;
 
-        // Smooth interpolation to real levels
+        // Smooth interpolation with faster attack
         const current = parseFloat(vuBars[i].style.height) || 1;
         let next;
         if (target > current) {
-          next = current + (target - current) * 0.35;  // fast attack
+          next = current + (target - current) * 0.4;
         } else {
-          next = current - (current - target) * 0.1;   // slow decay
+          next = current - (current - target) * 0.08;
         }
         next = Math.max(1, Math.min(100, next));
 
         vuBars[i].style.height = next + '%';
-        vuBars[i].className = 'level-bar';
-        if (next > 90) vuBars[i].classList.add('clipping');
-        else if (next > 70) vuBars[i].classList.add('warning');
+        vuBars[i].className = 'eq-bar band-' + (i % 16);
+        if (next > 85) vuBars[i].classList.add('clipping');
+        else if (next > 65) vuBars[i].classList.add('warning');
 
         if (next > peakVal) peakVal = next;
         vuDisplayLevels[i] = next;
+        if (i < 16 && next > maxL) maxL = next;
+        if (i >= 16 && next > maxR) maxR = next;
       }
 
       // Peak hold
       if (peakVal > vuPeak) vuPeak = peakVal;
-      vuPeak = vuPeak * 0.97;
+      vuPeak = vuPeak * 0.96;
       if (vuPeak < 1) vuPeak = 1;
       document.getElementById('vu-peak').textContent = vuRunning
         ? 'PEAK ' + Math.round(vuPeak) + '%'
         : 'PEAK --';
 
       const statusEl = document.getElementById('vu-status');
-      statusEl.textContent = vuRunning ? '\u25cf playing' : '\u25cb idle';
+      statusEl.textContent = vuRunning ? '\u25cf' : '\u25cb';
       statusEl.style.color = vuRunning ? 'var(--green)' : 'var(--text2)';
 
-      // Channel dB from real levels
-      const lDb = vuRunning ? Math.round(vuDisplayLevels[0] * 0.4 - 40) : null;
-      const rDb = vuRunning ? Math.round(vuDisplayLevels[16] * 0.4 - 40) : null;
+      // Channel dB from peak per channel
+      const lDb = vuRunning ? Math.round(maxL * 0.4 - 40) : null;
+      const rDb = vuRunning ? Math.round(maxR * 0.4 - 40) : null;
       document.getElementById('vu-channel-l').textContent =
         'L: ' + (lDb !== null ? (lDb < -40 ? '-inf' : lDb + 'dB') : '-inf');
       document.getElementById('vu-channel-r').textContent =
