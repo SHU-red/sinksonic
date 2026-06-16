@@ -1410,8 +1410,11 @@ func initVUParec() {
 			// Scale RMS to 0-100 using: 1 - 1/(RMS/scale+1)
 			rmsL := float64(sumL) / float64(numSamples)
 			rmsR := float64(sumR) / float64(numSamples)
-			vuLastL = (1 - 1/(rmsL/100000+1)) * 100
-			vuLastR = (1 - 1/(rmsR/100000+1)) * 100
+			// Scale RMS to 0-100 with better sensitivity
+			// At 120Hz, sine wave at 50% amplitude gives RMS ~2e7
+			// Use: log-like scaling with clamp
+			vuLastL = (1 - 1/(rmsL/300000+1)) * 100
+			vuLastR = (1 - 1/(rmsR/300000+1)) * 100
 			if vuLastL > 100 {
 				vuLastL = 100
 			}
